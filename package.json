@@ -1,0 +1,40 @@
+{
+  "name": "bnbclaw",
+  "version": "0.1.0",
+  "description": "OpenClaw AI agent that maximizes BNB utility on Binance",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc --watch",
+    "test": "vitest"
+  },
+  "keywords": [
+    "binance",
+    "bnb",
+    "openclaw",
+    "trading",
+    "ai-agent"
+  ],
+  "author": "",
+  "license": "MIT",
+  "type": "commonjs",
+  "dependencies": {
+    "@mariozechner/pi-agent-core": "^0.57.1",
+    "@sinclair/typebox": "^0.34.48",
+    "better-sqlite3": "^12.6.2",
+    "crypto-js": "^4.2.0",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "typescript": "^5.9.3",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/crypto-js": "^4.2.2",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.3.5",
+    "@types/ws": "^8.18.1",
+    "vitest": "^4.0.18"
+  }
+}

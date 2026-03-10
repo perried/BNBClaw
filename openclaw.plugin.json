@@ -1,0 +1,56 @@
+{
+  "id": "bnbclaw",
+  "name": "BNBClaw",
+  "description": "AI agent that maximizes BNB utility on Binance — auto-earn, trading, hedging, and reward accumulation. Never sells BNB, only accumulates.",
+  "version": "0.1.0",
+  "homepage": "https://github.com/bnbclaw/bnbclaw",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["binance_api_key", "binance_api_secret"],
+    "properties": {
+      "binance_api_key": {
+        "type": "string",
+        "description": "Binance API key (enable spot + futures trade; disable withdraw)"
+      },
+      "binance_api_secret": {
+        "type": "string",
+        "description": "Binance API secret"
+      },
+      "webhook_secret": {
+        "type": "string",
+        "description": "TradingView webhook secret token (optional)"
+      },
+      "webhook_port": {
+        "type": "number",
+        "description": "Webhook server port",
+        "default": 3000
+      },
+      "usdt_floor": {
+        "type": "number",
+        "description": "Minimum USDT balance — agent stops trading below this",
+        "default": 500
+      },
+      "leverage": {
+        "type": "number",
+        "description": "Futures leverage multiplier",
+        "default": 3
+      },
+      "risk_per_trade": {
+        "type": "number",
+        "description": "Fraction of available USDT per trade (0.01–0.20)",
+        "default": 0.05
+      },
+      "bnb_buy_threshold": {
+        "type": "number",
+        "description": "Accumulated short profits (USDT) before auto-buying BNB",
+        "default": 50
+      },
+      "hedge_ratio": {
+        "type": "number",
+        "description": "Target hedge ratio (0.0–1.0)",
+        "default": 0.85
+      }
+    }
+  }
+}
