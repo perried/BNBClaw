@@ -28,6 +28,7 @@ import type {
 
 import { BinanceClient } from './binance-client.js';
 import { BinanceWs } from './binance-ws.js';
+import { AnnouncementMonitor } from '../core/announcement-monitor.js';
 import { EarnManager } from '../core/earn-manager.js';
 import { EventScheduler } from '../core/event-scheduler.js';
 import { TradeEngine } from '../core/trade-engine.js';
@@ -41,6 +42,7 @@ import { earnStatusSkill, moveBnbToEarnSkill } from '../skills/earn.js';
 import { tradeHistorySkill } from '../skills/trade.js';
 import { rewardHistorySkill } from '../skills/rewards.js';
 import { showSettingsSkill, updateSettingSkill } from '../skills/settings.js';
+import { announcementHistorySkill } from '../skills/announcements.js';
 import { hedgeStatusSkill } from '../skills/hedge.js';
 import { getEnvConfig, getSettings } from '../config/settings.js';
 import { getDb, closeDb } from '../db/database.js';
@@ -159,6 +161,7 @@ const plugin: OpenClawPluginDefinition = {
     const hedgeManager = new HedgeManager(client, notify);
     const strategy = new Strategy(client);
     const accumulator = new Accumulator(client, notify);
+    const announcementMonitor = new AnnouncementMonitor(notify);
 
     // ── LLM-callable Tools ────────────────────────────────
 
@@ -227,6 +230,19 @@ const plugin: OpenClawPluginDefinition = {
       parameters: Type.Object({}),
       async execute() {
         const text = showSettingsSkill();
+        return textResult(text);
+      },
+    });
+
+    api.registerTool({
+      name: 'bnbclaw_announcements',
+      label: 'BNBClaw Announcements',
+      description: 'Show recent Binance announcements: HODLer airdrops, Launchpool, Megadrop',
+      parameters: Type.Object({
+        limit: Type.Optional(Type.Number({ description: 'Number of announcements to show (default 10)' })),
+      }),
+      async execute(_toolCallId: string, params: { limit?: number }) {
+        const text = announcementHistorySkill(params.limit ?? 10);
         return textResult(text);
       },
     });
@@ -317,6 +333,7 @@ const plugin: OpenClawPluginDefinition = {
 
     const heartbeat = new HeartbeatScheduler();
     registerHeartbeats(heartbeat, {
+      announcementMonitor,
       earnManager,
       eventScheduler,
       hedgeManager,

@@ -58,6 +58,13 @@ CREATE TABLE IF NOT EXISTS accumulator (
 -- Initialize accumulator row
 INSERT OR IGNORE INTO accumulator (id, short_profit_buffer) VALUES (1, 0);
 
+-- Track seen Binance announcements (dedup for notification alerts)
+CREATE TABLE IF NOT EXISTS seen_announcements (
+    code TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    seen_at TEXT NOT NULL
+);
+
 -- Scheduled jobs (Megadrop, timed events)
 CREATE TABLE IF NOT EXISTS scheduled_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

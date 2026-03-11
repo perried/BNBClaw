@@ -1,3 +1,4 @@
+import type { AnnouncementMonitor } from '../core/announcement-monitor.js';
 import type { EarnManager } from '../core/earn-manager.js';
 import type { EventScheduler } from '../core/event-scheduler.js';
 import type { HedgeManager } from '../core/hedge-manager.js';
@@ -63,13 +64,14 @@ export class HeartbeatScheduler {
 export function registerHeartbeats(
   scheduler: HeartbeatScheduler,
   deps: {
+    announcementMonitor: AnnouncementMonitor;
     earnManager: EarnManager;
     eventScheduler: EventScheduler;
     hedgeManager: HedgeManager;
     riskManager: RiskManager;
   }
 ): void {
-  const { earnManager, eventScheduler, hedgeManager, riskManager } = deps;
+  const { announcementMonitor, earnManager, eventScheduler, hedgeManager, riskManager } = deps;
 
   // Scheduled jobs — every 30 sec
   scheduler.register('scheduled-jobs', 30_000, async () => {
@@ -97,5 +99,10 @@ export function registerHeartbeats(
   // Weekly dust cleanup — every 7 days
   scheduler.register('dust-cleanup', 7 * 24 * 60 * 60_000, async () => {
     await earnManager.cleanupDust();
+  });
+
+  // Announcement check — every 5 min
+  scheduler.register('announcement-check', 5 * 60_000, async () => {
+    await announcementMonitor.check();
   });
 }
