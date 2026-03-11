@@ -21,11 +21,11 @@ export async function convertRewardsSkill(deps: {
   );
 }
 
-const TRACKED_TYPES = ['hodler airdrop', 'bnb vault', 'launchpool'];
+const HIGHLIGHT_TYPES = ['hodler airdrop', 'bnb vault', 'launchpool', 'staking', 'mining'];
 
-function isTrackedDistribution(enInfo: string): boolean {
+function isHighlighted(enInfo: string): boolean {
   const lower = enInfo.toLowerCase();
-  return TRACKED_TYPES.some(t => lower.includes(t));
+  return HIGHLIGHT_TYPES.some(t => lower.includes(t));
 }
 
 export async function rewardHistorySkill(client: BinanceClient, days = 30): Promise<string> {
@@ -33,23 +33,27 @@ export async function rewardHistorySkill(client: BinanceClient, days = 30): Prom
 
   // Fetch live distributions from Binance
   const dividends = await client.getAssetDividend({ startTime, limit: 100 });
-  const tracked = dividends.filter(d => isTrackedDistribution(d.enInfo));
 
-  // Group by type
+  // Group ALL distributions by enInfo type
   const byType: Record<string, Array<{ asset: string; amount: string; time: number }>> = {};
-  for (const d of tracked) {
+  for (const d of dividends) {
     const type = d.enInfo;
     if (!byType[type]) byType[type] = [];
     byType[type].push({ asset: d.asset, amount: d.amount, time: d.divTime });
   }
 
-  let msg = `🦞 Distributions (${days} days)\n━━━━━━━━━━━━━━━━━━━━\n`;
+  let msg = `🦞 Distributions (${days} days) — ${dividends.length} total\n━━━━━━━━━━━━━━━━━━━━\n`;
 
-  if (tracked.length === 0) {
-    msg += 'No HODLer Airdrops, BNB Vault, or Launchpool distributions found.\n';
+  if (dividends.length === 0) {
+    msg += 'No distributions found.\n';
   } else {
-    for (const [type, items] of Object.entries(byType)) {
-      msg += `\n📌 ${type} (${items.length})\n`;
+    // Show highlighted types first, then the rest
+    const highlighted = Object.entries(byType).filter(([t]) => isHighlighted(t));
+    const other = Object.entries(byType).filter(([t]) => !isHighlighted(t));
+
+    for (const [type, items] of [...highlighted, ...other]) {
+      const star = isHighlighted(type) ? '⭐' : '📌';
+      msg += `\n${star} ${type} (${items.length})\n`;
       for (const item of items.sort((a, b) => b.time - a.time)) {
         const date = new Date(item.time).toISOString().slice(0, 10);
         msg += `  ${date} | +${item.amount} ${item.asset}\n`;
