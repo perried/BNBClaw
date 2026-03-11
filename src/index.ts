@@ -2,7 +2,6 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { BinanceClient } from './api/binance-client.js';
-import { BinanceWs } from './api/binance-ws.js';
 import { WebhookServer } from './api/webhook-server.js';
 import { TelegramBot } from './api/telegram.js';
 import { LlmRouter } from './api/llm-router.js';
@@ -65,7 +64,6 @@ async function main(): Promise<void> {
 
   // Create core instances
   const client = new BinanceClient(env.binanceApiKey, env.binanceApiSecret);
-  const ws = new BinanceWs(client);
   const earnManager = new EarnManager(client, notify);
   const eventScheduler = new EventScheduler(notify);
   const tradeEngine = new TradeEngine(client, notify);
@@ -73,29 +71,6 @@ async function main(): Promise<void> {
   const hedgeManager = new HedgeManager(client, notify);
   const strategy = new Strategy(client);
   const accumulator = new Accumulator(client, notify);
-  // Wire up WebSocket events
-  ws.on('balanceUpdate', async (event: { asset: string; delta: number }) => {
-    await earnManager.onBalanceUpdate(event.asset, event.delta);
-  });
-
-  ws.on('orderUpdate', async (event: { status: string; realizedProfit: number }) => {
-    if (event.status === 'FILLED') {
-      log.info('Futures order filled', event);
-    }
-  });
-
-  ws.on('connected', (label: string) => log.info(`WebSocket connected: ${label}`));
-  ws.on('disconnected', (label: string) => log.warn(`WebSocket disconnected: ${label}`));
-  ws.on('error', (err: any) => log.error('WebSocket error', err));
-
-  // Start WebSocket streams (non-fatal if blocked)
-  try {
-    await ws.start();
-    log.info('WebSocket streams started');
-  } catch (err) {
-    log.warn('WebSocket streams failed to start — running in polling-only mode', err);
-    notify('⚠️ WebSocket streams unavailable. Reward detection will use polling fallback (every 30 min).');
-  }
 
   // Start webhook server (if configured)
   const settings = getSettings();
@@ -190,7 +165,6 @@ async function main(): Promise<void> {
     log.info('Shutting down...');
     telegram.stopPolling();
     heartbeat.stop();
-    ws.stop();
     closeDb();
     process.exit(0);
   };

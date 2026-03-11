@@ -40,10 +40,9 @@ BNB          ──→ NEVER SOLD
 ```
 src/
 ├── api/
-│   ├── plugin.ts            # OpenClaw plugin entry (13 tools + service + hooks)
+│   ├── plugin.ts            # OpenClaw plugin entry (17 tools + service + hooks)
 │   ├── openclaw-types.ts    # Local OpenClaw SDK type definitions
 │   ├── binance-client.ts    # REST API wrapper (HMAC-SHA256 signed)
-│   ├── binance-ws.ts        # WebSocket streams (market + user data)
 │   ├── webhook-server.ts    # TradingView webhooks
 │   ├── telegram.ts          # Telegram Bot API (standalone mode)
 │   ├── llm-router.ts        # LLM function-calling router (standalone mode)
@@ -73,7 +72,7 @@ src/
 
 ## LLM Tools
 
-BNBClaw exposes 13 tools to the LLM via the OpenClaw plugin system. The AI decides which tool to call based on natural language:
+BNBClaw exposes 17 tools to the LLM via the OpenClaw plugin system. The AI decides which tool to call based on natural language:
 
 | Tool | Description |
 |------|-------------|
@@ -81,7 +80,7 @@ BNBClaw exposes 13 tools to the LLM via the OpenClaw plugin system. The AI decid
 | `bnbclaw_earn` | Simple Earn positions and APY |
 | `bnbclaw_rewards` | Live reward history from Binance API (airdrops, Launchpool, distributions) |
 | `bnbclaw_trades` | Recent trade history with open/closed positions and PnL |
-| `bnbclaw_hedge` | Current hedge status — active/inactive, short size, ratio |
+| `bnbclaw_hedge` | Hedge control — activate (on), deactivate (off), or show status |
 | `bnbclaw_settings` | Show current settings |
 | `bnbclaw_update_setting` | Update a setting (usdt_floor, leverage, risk_per_trade, etc.) |
 | `bnbclaw_apy` | Live APY rates for flexible and locked Simple Earn products |
@@ -90,6 +89,10 @@ BNBClaw exposes 13 tools to the LLM via the OpenClaw plugin system. The AI decid
 | `bnbclaw_scan` | Scan spot + funding wallets for idle tokens, dust, unconverted airdrops |
 | `bnbclaw_convert` | Convert a token to USDT or BNB (spot order or Convert API fallback) |
 | `bnbclaw_transfer` | Transfer tokens between spot, funding, futures, and earn wallets |
+| `bnbclaw_buy_bnb` | Buy BNB on spot market with USDT, optionally sweep to Simple Earn |
+| `bnbclaw_open_position` | Open a futures position (LONG or SHORT) on BNBUSDT |
+| `bnbclaw_close_position` | Close a position by trade ID, or close all open positions |
+| `bnbclaw_positions` | View open futures positions with unrealized PnL |
 
 ## Quick Start
 
@@ -139,7 +142,6 @@ npm start
 ```
 
 The agent starts and:
-- Connects to Binance WebSocket streams
 - Subscribes idle BNB to Simple Earn
 - Starts the heartbeat scheduler (earn sweep, reward check, dust cleanup)
 - Starts Telegram messaging

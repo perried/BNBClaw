@@ -54,15 +54,15 @@
 ## Architecture
 
 ```
- ┌──────────────┐
- │  TradingView │ (optional)
- │  Webhooks    │
- └──────┬───────┘
-        │ HTTP POST
-        ▼
+                    ┌──────────────┐
+                    │  TradingView │ (optional)
+                    │  Webhooks    │
+                    └──────┬───────┘
+                           │ HTTP POST
+                           ▼
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────┐
-│  Telegram /  │◄───►│  OpenClaw Gateway │◄───►│  LLM Brain  │
-│  WhatsApp    │     │    (Node.js)      │     │ (Claude/GPT) │
+│  Telegram   │◄───►│  OpenClaw Gateway │◄───►│  LLM Brain  │
+│             │     │    (Node.js)      │     │  (Claude)   │
 └─────────────┘     └────────┬─────────┘     └─────────────┘
                              │
                     ┌────────┴────────┐
@@ -73,8 +73,8 @@
         ┌────────────────────┼────────────────────┐
         ▼                    ▼                    ▼
 ┌──────────────┐    ┌──────────────┐     ┌────────────┐
-│ Binance API  │    │  Webhook +   │     │  State DB  │
-│ (REST/WS)    │    │  Market Data │     │  (SQLite)  │
+│ Binance API  │    │  Webhook     │     │  State DB  │
+│   (REST)     │    │  (optional)  │     │  (SQLite)  │
 └──────────────┘    └──────────────┘     └────────────┘
 ```
 
@@ -84,7 +84,7 @@ BNBClaw works in two modes:
 
 1. **OpenClaw Plugin** (recommended) — Loaded by the OpenClaw gateway via `openclaw.config.json`.
    OpenClaw handles multi-channel messaging (Telegram, WhatsApp, Discord, etc.) and LLM routing.
-   BNBClaw registers 8 LLM-callable tools (2 ownerOnly), 1 background service, 1 HTTP route,
+   BNBClaw registers 17 LLM-callable tools, 1 background service, 1 HTTP route,
    and lifecycle hooks. Plugin config is validated against `openclaw.plugin.json` manifest.
 
 2. **Standalone** — Run via `npm start`. Uses built-in Telegram polling + LLM router
@@ -116,7 +116,6 @@ BNBClaw/
 │   │   ├── plugin.ts           # OpenClaw plugin entry — tools/service/hooks/route
 │   │   ├── openclaw-types.ts   # Full type definitions for OpenClaw plugin SDK
 │   │   ├── binance-client.ts   # Binance REST API wrapper (authenticated)
-│   │   ├── binance-ws.ts       # Binance WebSocket: price data + User Data Stream (balance updates)
 │   │   ├── webhook-server.ts   # HTTP server for TradingView webhook alerts
 │   │   ├── telegram.ts         # Telegram Bot API (standalone mode)
 │   │   ├── llm-router.ts       # LLM function-calling router (standalone mode)
@@ -137,7 +136,8 @@ BNBClaw/
 │   │   ├── trade.ts            # "Go long/short BNB" — manual trade skill
 │   │   ├── hedge.ts            # "Activate hedge" — hedge control skill
 │   │   ├── settings.ts         # "Set USDT floor to 500" — config skill
-│   │   └── rewards.ts          # "Convert my airdrops" — reward management skill
+│   │   ├── rewards.ts          # "Convert my airdrops" — reward management skill
+│   │   └── apy.ts              # APR rates for flexible + locked products
 │   │
 │   ├── heartbeat/
 │   │   ├── scheduler.ts        # Heartbeat — runs every N minutes
@@ -206,42 +206,21 @@ All three run simultaneously. No redeem/re-subscribe cycle required.
 **Responsibilities:**
 - Ensure all BNB stays parked in Simple Earn Flexible at all times
 - Sweep idle spot BNB into Simple Earn Flexible
-- React to WebSocket `balanceUpdate` events for instant reward detection
-- Verify rewards via `getAssetDividend` before selling (never sell user's manual buys)
+- Poll `getAssetDividend` for reward detection via heartbeat
+- Verify rewards before selling (never sell user's manual buys)
 - Auto-sell confirmed reward tokens to USDT
 - Track reward history in DB
 
-**Primary: WebSocket Real-Time Detection (instant)**
+**Heartbeat Poll (every 30 min)**
 ```
-on_balanceUpdate(event):             // User Data Stream WebSocket
-    if event.asset == "BNB": return   // never sell BNB
-    if event.delta <= 0: return       // outflow, ignore
-
-    // Verify this is a reward, not a manual buy/transfer
-    dividends = api.getAssetDividend(asset=event.asset, limit=5)
-    match = find dividend where amount ≈ event.delta and timestamp ≈ now
-
-    if match found:
-        // Confirmed reward — auto-sell
-        // match.enNotes tells source: "Launchpool", "HODLer Airdrop", etc.
-        log to rewards table (source=match.enNotes, asset, amount, tranId)
-        sell_to_usdt(match.asset, match.amount)
-        notify: "Sold {amount} {asset} ({source}) → {usdt} USDT"
-    else:
-        // Not a reward — user bought or transferred it. Don't touch.
-        log: "Detected {amount} {asset} deposit — not a reward, skipping."
-```
-
-**Fallback: Heartbeat Poll (catches anything missed during WS downtime)**
-```
-on_heartbeat():                      // every 30 min
+on_heartbeat():
     // Keep BNB parked
     idle_bnb = api.getSpotBalance("BNB")
     if idle_bnb > 0.01:
         subscribe to Simple Earn Flexible
         notify: "Moved {X} idle BNB to Simple Earn."
 
-    // Catch-up: check for rewards the WebSocket may have missed
+    // Check for new reward distributions
     distributions = api.getAssetDividend(limit=20)
     for dist in distributions:
         if already_in_db(dist.tranId): skip
@@ -403,7 +382,7 @@ LAYER 2 — RSI Mean Reversion (swing trades):
 **Why this works for BNBClaw:**
 - Funding rate = near-zero risk passive income
 - RSI extremes = high-conviction, low-frequency trades (~3-8/month)
-- Both are computed from Binance WebSocket data (no external dependency)
+- Both use Binance REST API data (funding rate endpoint + price data)
 
 **When TradingView IS configured:**
 - Built-in strategy goes silent (or can run in "alert-only" mode)
@@ -691,8 +670,7 @@ CREATE TABLE scheduled_jobs (
 ### Phase 1 — Foundation (Core API + Earn)
 1. Project setup (package.json, tsconfig, .env)
 2. `api/binance-client.ts` — REST API wrapper
-3. `api/binance-ws.ts` — WebSocket: price data + User Data Stream (balanceUpdate for instant reward detection)
-4. `db/` — SQLite setup + schema
+3. `db/` — SQLite setup + schema
 5. `config/settings.ts` — User settings
 6. `core/earn-manager.ts` — Simple Earn + Reward auto-sell
 7. `core/event-scheduler.ts` — Scheduled Megadrop/event actions
@@ -747,12 +725,11 @@ CREATE TABLE scheduled_jobs (
 |---|---|
 | Runtime | Node.js 22+ / TypeScript |
 | AI Agent | OpenClaw Plugin (via plugin-sdk) or Standalone |
-| LLM | Any OpenAI-compatible (GPT-4o, Claude, Groq, etc.) |
-| Exchange API | Binance REST + WebSocket |
+| LLM | Anthropic Claude (via OpenClaw gateway) |
+| Exchange API | Binance REST (polling-based) |
 | Strategy Signals | Built-in (funding rate + RSI) or TradingView Webhooks |
 | Database | SQLite (better-sqlite3) |
-| Messaging | Telegram (OpenClaw multi-channel or standalone polling) |
-| Messaging | Telegram + LLM Router |
+| Messaging | Telegram (OpenClaw gateway or standalone polling) |
 | Testing | Vitest |
 
 ---

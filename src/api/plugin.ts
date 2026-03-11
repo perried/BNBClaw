@@ -26,7 +26,6 @@ import type {
 } from './openclaw-types.js';
 
 import { BinanceClient } from './binance-client.js';
-import { BinanceWs } from './binance-ws.js';
 import { EarnManager } from '../core/earn-manager.js';
 import { EventScheduler } from '../core/event-scheduler.js';
 import { TradeEngine } from '../core/trade-engine.js';
@@ -40,7 +39,7 @@ import { earnStatusSkill, moveBnbToEarnSkill } from '../skills/earn.js';
 import { tradeHistorySkill } from '../skills/trade.js';
 import { rewardHistorySkill } from '../skills/rewards.js';
 import { showSettingsSkill, updateSettingSkill } from '../skills/settings.js';
-import { hedgeStatusSkill } from '../skills/hedge.js';
+import { activateHedgeSkill, deactivateHedgeSkill, hedgeStatusSkill } from '../skills/hedge.js';
 import { apySkill } from '../skills/apy.js';
 import { getEnvConfig, getSettings } from '../config/settings.js';
 import { getDb, closeDb } from '../db/database.js';
@@ -150,7 +149,6 @@ const plugin: OpenClawPluginDefinition = {
 
     // ── Core modules ──────────────────────────────────────
     const client = new BinanceClient(keys.apiKey, keys.apiSecret);
-    const ws = new BinanceWs(client);
     const earnManager = new EarnManager(client, notify);
     const eventScheduler = new EventScheduler(notify);
     const tradeEngine = new TradeEngine(client, notify);
@@ -210,9 +208,20 @@ const plugin: OpenClawPluginDefinition = {
     api.registerTool({
       name: 'bnbclaw_hedge',
       label: 'BNBClaw Hedge',
-      description: 'Show current hedge status: active/inactive, short size, hedge ratio, unrealized PnL',
-      parameters: Type.Object({}),
-      async execute() {
+      description: 'Hedge control: activate, deactivate, or show status of the delta-neutral hedge (futures short against BNB holdings)',
+      parameters: Type.Object({
+        action: Type.Optional(Type.String({ description: 'Action: "on" to activate, "off" to deactivate, omit for status' })),
+      }),
+      async execute(_toolCallId: string, params: { action?: string }) {
+        const act = (params.action || '').toLowerCase();
+        if (act === 'on') {
+          const text = await activateHedgeSkill({ hedgeManager });
+          return textResult(text);
+        }
+        if (act === 'off') {
+          const text = await deactivateHedgeSkill({ hedgeManager });
+          return textResult(text);
+        }
         const text = await hedgeStatusSkill({ hedgeManager });
         return textResult(text);
       },
@@ -232,7 +241,7 @@ const plugin: OpenClawPluginDefinition = {
     api.registerTool({
       name: 'bnbclaw_apy',
       label: 'BNBClaw APY Rates',
-      description: 'LIVE from Binance API: Show Simple Earn APY rates for flexible and locked products. Optionally filter by asset.',
+      description: 'LIVE from Binance API: Show Simple Earn APR rates for flexible and locked products (includes BNB holder bonus tiers). Optionally filter by asset.',
       parameters: Type.Object({
         asset: Type.Optional(Type.String({ description: 'Filter by asset (e.g. BNB, USDT). Omit to show top rates.' })),
       }),
@@ -275,13 +284,13 @@ const plugin: OpenClawPluginDefinition = {
     api.registerTool({
       name: 'bnbclaw_update_setting',
       label: 'BNBClaw Update Setting',
-      description: 'Update a setting. Valid keys: usdt_floor, leverage, risk_per_trade, bnb_buy_threshold, hedge_ratio',
+      description: 'Update a setting. Valid keys: usdt_floor, leverage, risk_per_trade, bnb_buy_threshold, hedge_ratio, webhook_enabled (true/false)',
       parameters: Type.Object({
         key: Type.String({ description: 'Setting key to update' }),
-        value: Type.Number({ description: 'The new value for the setting' }),
+        value: Type.Union([Type.Number(), Type.Boolean()], { description: 'The new value for the setting' }),
       }),
-      async execute(_toolCallId: string, params: { key: string; value: number }) {
-        const validKeys = ['usdt_floor', 'leverage', 'risk_per_trade', 'bnb_buy_threshold', 'hedge_ratio'];
+      async execute(_toolCallId: string, params: { key: string; value: number | boolean }) {
+        const validKeys = ['usdt_floor', 'leverage', 'risk_per_trade', 'bnb_buy_threshold', 'hedge_ratio', 'webhook_enabled'];
         if (!validKeys.includes(params.key)) {
           return textResult(`Invalid key "${params.key}". Valid keys: ${validKeys.join(', ')}`);
         }
@@ -427,10 +436,139 @@ const plugin: OpenClawPluginDefinition = {
       },
     });
 
-    // ── TradingView Webhook Route ─────────────────────────
+    // ── Trading Tools ─────────────────────────────────────
 
-    const settings = getSettings();
-    if (keys.webhookSecret && settings.webhook_enabled) {
+    api.registerTool({
+      name: 'bnbclaw_buy_bnb',
+      label: 'BNBClaw Buy BNB',
+      description: 'Buy BNB on spot market with USDT. Optionally sweep purchased BNB into Simple Earn.',
+      parameters: Type.Object({
+        amount_usdt: Type.Number({ description: 'USDT amount to spend buying BNB' }),
+        sweep: Type.Optional(Type.Boolean({ description: 'Move purchased BNB to Simple Earn (default true)' })),
+      }),
+      async execute(_toolCallId: string, params: { amount_usdt: number; sweep?: boolean }) {
+        if (params.amount_usdt <= 0) return textResult('Amount must be positive.');
+        try {
+          const order = await client.placeSpotQuoteOrder('BUY', params.amount_usdt, 'BNBUSDT');
+          const bnbBought = parseFloat(order.executedQty);
+          const avgPrice = parseFloat(order.avgPrice);
+          let msg = `🦞 Bought ${bnbBought.toFixed(4)} BNB @ $${avgPrice.toFixed(2)} (spent $${params.amount_usdt.toFixed(2)} USDT)`;
+
+          if (params.sweep !== false) {
+            try {
+              await client.subscribeEarn('BNB', bnbBought);
+              msg += '\n→ Swept to Simple Earn.';
+            } catch {
+              msg += '\n⚠️ Earn sweep failed — BNB remains in spot.';
+            }
+          }
+          return textResult(msg);
+        } catch (err: any) {
+          return textResult(`Failed to buy BNB: ${err.message}`);
+        }
+      },
+    });
+
+    api.registerTool({
+      name: 'bnbclaw_open_position',
+      label: 'BNBClaw Open Position',
+      description: 'Open a futures position (LONG or SHORT) on BNBUSDT. Uses risk manager for size if not specified.',
+      parameters: Type.Object({
+        direction: Type.String({ description: 'LONG or SHORT' }),
+        size_bnb: Type.Optional(Type.Number({ description: 'Position size in BNB (omit to auto-calculate from risk settings)' })),
+      }),
+      async execute(_toolCallId: string, params: { direction: string; size_bnb?: number }) {
+        const dir = params.direction.toUpperCase();
+        if (dir !== 'LONG' && dir !== 'SHORT') {
+          return textResult('Direction must be LONG or SHORT.');
+        }
+
+        const mode = await riskManager.getMode();
+        if (mode === 'PASSIVE') {
+          return textResult('🔴 Trading paused — USDT below floor. Increase balance or lower usdt_floor setting.');
+        }
+
+        const size = params.size_bnb ?? await riskManager.calculateSize();
+        if (size <= 0) {
+          return textResult('Calculated position size is 0. Check USDT balance and risk settings.');
+        }
+
+        try {
+          const tradeId = await tradeEngine.openTrade(dir as 'LONG' | 'SHORT', size);
+          return textResult(`🦞 Opened ${dir} ${size.toFixed(2)} BNB (trade #${tradeId})`);
+        } catch (err: any) {
+          return textResult(`Failed to open position: ${err.message}`);
+        }
+      },
+    });
+
+    api.registerTool({
+      name: 'bnbclaw_close_position',
+      label: 'BNBClaw Close Position',
+      description: 'Close a futures position by trade ID, or close all open positions if no ID given.',
+      parameters: Type.Object({
+        trade_id: Type.Optional(Type.Number({ description: 'Trade ID to close (omit to close all)' })),
+      }),
+      async execute(_toolCallId: string, params: { trade_id?: number }) {
+        try {
+          if (params.trade_id != null) {
+            await tradeEngine.closeTradeById(params.trade_id);
+            return textResult(`🦞 Closed trade #${params.trade_id}.`);
+          }
+          await tradeEngine.closeAllTrades();
+          return textResult('🦞 All positions closed.');
+        } catch (err: any) {
+          return textResult(`Failed to close position: ${err.message}`);
+        }
+      },
+    });
+
+    api.registerTool({
+      name: 'bnbclaw_positions',
+      label: 'BNBClaw Positions',
+      description: 'Show open futures positions from Binance API with unrealized PnL, plus locally tracked trades.',
+      parameters: Type.Object({}),
+      async execute() {
+        try {
+          const [livePositions, dbTrades] = await Promise.all([
+            client.getFuturesPositions(),
+            Promise.resolve(tradeEngine.getOpenPositions()),
+          ]);
+
+          let msg = '🦞 Open Positions\n━━━━━━━━━━━━━━━━━━━━\n';
+
+          if (livePositions.length === 0 && dbTrades.length === 0) {
+            return textResult(msg + 'No open positions.');
+          }
+
+          if (livePositions.length > 0) {
+            msg += '\n📊 Binance Futures:\n';
+            for (const p of livePositions) {
+              const amt = parseFloat(p.positionAmt);
+              const side = amt > 0 ? 'LONG' : 'SHORT';
+              const pnl = parseFloat(p.unRealizedProfit);
+              msg += `  ${p.symbol} ${side} ${Math.abs(amt)} BNB | uPnL: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}\n`;
+            }
+          }
+
+          if (dbTrades.length > 0) {
+            msg += '\n📋 Tracked Trades:\n';
+            for (const t of dbTrades) {
+              msg += `  #${t.id} ${t.direction} ${t.size_bnb} BNB @ $${t.entry_price.toFixed(2)}\n`;
+            }
+          }
+
+          return textResult(msg);
+        } catch (err: any) {
+          return textResult(`Failed to fetch positions: ${err.message}`);
+        }
+      },
+    });
+
+    // ── TradingView Webhook Route ─────────────────────────
+    // Always registered if secret is configured; checked at runtime via webhook_enabled setting.
+
+    if (keys.webhookSecret) {
       api.registerHttpRoute({
         path: '/bnbclaw/webhook',
         auth: 'plugin',
@@ -440,6 +578,14 @@ const plugin: OpenClawPluginDefinition = {
           if (req.method !== 'POST') {
             res.writeHead(405);
             res.end('Method Not Allowed');
+            return;
+          }
+
+          // Check if webhook is enabled at runtime
+          const currentSettings = getSettings();
+          if (!currentSettings.webhook_enabled) {
+            res.writeHead(403);
+            res.end('Webhook disabled');
             return;
           }
 
@@ -490,20 +636,7 @@ const plugin: OpenClawPluginDefinition = {
     api.registerService({
       id: 'bnbclaw-agent',
       async start() {
-        // Start WebSocket streams (non-fatal if blocked)
-        try {
-          await ws.start();
-          logger.info('WebSocket streams started');
-        } catch {
-          logger.warn('WebSocket streams failed — running in polling-only mode');
-        }
-
-        // Wire WebSocket events
-        ws.on('balanceUpdate', async (event: { asset: string; delta: number }) => {
-          await earnManager.onBalanceUpdate(event.asset, event.delta);
-        });
-
-        // Start heartbeat scheduler
+        // Start heartbeat scheduler (polling-based)
         heartbeat.start();
         logger.info('Heartbeat scheduler started');
 
@@ -519,7 +652,6 @@ const plugin: OpenClawPluginDefinition = {
 
       async stop() {
         heartbeat.stop();
-        ws.stop();
         closeDb();
         logger.info('🦞 BNBClaw agent service stopped');
       },
@@ -534,7 +666,8 @@ const plugin: OpenClawPluginDefinition = {
       'On /start: write 2-3 sentences introducing yourself and what you can help with. Do NOT list every tool.',
       'On follow-up messages: be concise but helpful. Show key data, skip fluff.',
       'RULES: Never sell BNB. Always use bnbclaw_* tools for data — never guess.',
-      'You have tools for: status, earn, rewards, trades, hedge, settings, apy, price, scan, convert, transfer, sweep.',
+      'You have tools for: status, earn, rewards, trades, hedge (on/off/status), settings, apy, price, scan, convert, transfer, sweep, buy_bnb, open_position, close_position, positions.',
+      'For trading: use open_position to go LONG/SHORT, close_position to exit, positions to view, buy_bnb to accumulate BNB on spot.',
     ].join(' ');
 
     api.on('llm_input', (event: PluginHookEvent) => {
@@ -552,7 +685,7 @@ const plugin: OpenClawPluginDefinition = {
       }
     });
 
-    logger.info('🦞 BNBClaw plugin registered — 12 tools, 1 service, 1 route');
+    logger.info('🦞 BNBClaw plugin registered — 17 tools, 1 service, 1 route');
   },
 };
 
