@@ -129,7 +129,7 @@ const plugin: OpenClawPluginDefinition = {
   version: '0.1.0',
   configSchema,
 
-  async register(api: OpenClawPluginApi): Promise<void> {
+  register(api: OpenClawPluginApi): void {
     const logger = api.logger;
     const runtime: PluginRuntime = api.runtime;
     const keys = resolveKeys(api);
