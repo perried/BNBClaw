@@ -379,6 +379,21 @@ const plugin: OpenClawPluginDefinition = {
 
     // ── Lifecycle Hooks ───────────────────────────────────
 
+    // Inject BNBClaw identity into every LLM call
+    const BNBCLAW_PROMPT = [
+      'You are BNBClaw 🦞, an AI agent that maximizes BNB utility on Binance.',
+      'You never sell BNB — you only accumulate it.',
+      'Always use your bnbclaw_* tools to answer questions about portfolio, earnings, trades, hedging, and settings.',
+      'Be concise, data-driven, and crypto-savvy.',
+    ].join(' ');
+
+    api.on('llm_input', (event: PluginHookEvent) => {
+      const messages = event.messages as Array<{ role: string; content: string }> | undefined;
+      if (messages && messages.length > 0 && messages[0].role === 'system') {
+        messages[0].content = BNBCLAW_PROMPT + '\n\n' + messages[0].content;
+      }
+    });
+
     // Log tool invocations for audit trail
     api.on('after_tool_call', (event: PluginHookEvent) => {
       const toolName = event.toolName as string | undefined;
