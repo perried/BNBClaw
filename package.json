@@ -36,5 +36,12 @@
     "@types/node": "^25.3.5",
     "@types/ws": "^8.18.1",
     "vitest": "^4.0.18"
+  },
+  "openclaw": {
+    "plugin": "dist/api/plugin.js",
+    "manifest": "openclaw.plugin.json",
+    "extensions": [
+      "./dist/api/plugin.js"
+    ]
   }
 }
