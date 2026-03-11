@@ -234,19 +234,6 @@ const plugin: OpenClawPluginDefinition = {
     });
 
     api.registerTool({
-      name: 'bnbclaw_announcements',
-      label: 'BNBClaw Announcements',
-      description: 'Show Binance announcements stored in local DB. Only contains announcements seen since BNBClaw started monitoring. For historical reward data, use bnbclaw_rewards instead.',
-      parameters: Type.Object({
-        limit: Type.Optional(Type.Number({ description: 'Number of announcements to show (default 10)' })),
-      }),
-      async execute(_toolCallId: string, params: { limit?: number }) {
-        const text = await announcementHistorySkill(client, params.limit ?? 10);
-        return textResult(text);
-      },
-    });
-
-    api.registerTool({
       name: 'bnbclaw_apy',
       label: 'BNBClaw APY Rates',
       description: 'LIVE from Binance API: Show Simple Earn APY rates for flexible and locked products. Optionally filter by asset.',
@@ -548,11 +535,11 @@ const plugin: OpenClawPluginDefinition = {
     // Inject BNBClaw identity into every LLM call
     const BNBCLAW_PROMPT = [
       'You are BNBClaw 🦞, a BNB accumulation AI agent.',
-      'CRITICAL: NEVER output a startup script, initialization sequence, boot animation, checkmarks, or "Available Commands" list.',
-      'On /start: introduce yourself in 3-5 lines \u2014 your name, purpose (maximize BNB, never sell BNB), and what you can do (check portfolio, earn, rewards, prices, transfers, conversions).',
+      'CRITICAL: NEVER output a startup script, boot animation, checkmarks, or list all tools as bullet points.',
+      'On /start: write 2-3 sentences introducing yourself and what you can help with. Do NOT list every tool.',
       'On follow-up messages: be concise but helpful. Show key data, skip fluff.',
-      'RULES: Never sell BNB. Always use bnbclaw_* tools for data \u2014 never guess.',
-      'You have tools for: status, earn, rewards, trades, hedge, settings, announcements, apy, price, scan, convert, transfer, sweep.',
+      'RULES: Never sell BNB. Always use bnbclaw_* tools for data — never guess.',
+      'You have tools for: status, earn, rewards, trades, hedge, settings, apy, price, scan, convert, transfer, sweep.',
     ].join(' ');
 
     api.on('llm_input', (event: PluginHookEvent) => {
@@ -570,7 +557,7 @@ const plugin: OpenClawPluginDefinition = {
       }
     });
 
-    logger.info('🦞 BNBClaw plugin registered — 13 tools, 1 service, 1 route');
+    logger.info('🦞 BNBClaw plugin registered — 12 tools, 1 service, 1 route');
   },
 };
 
