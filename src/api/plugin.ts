@@ -277,12 +277,11 @@ const plugin: OpenClawPluginDefinition = {
       },
     });
 
-    // Mutating tools — ownerOnly so only the account owner can execute
+    // Mutating tools
     api.registerTool({
       name: 'bnbclaw_sweep',
       label: 'BNBClaw Sweep',
       description: 'Move idle BNB from spot wallet into Simple Earn Flexible',
-      ownerOnly: true,
       parameters: Type.Object({}),
       async execute() {
         const text = await moveBnbToEarnSkill({ client, earnManager });
@@ -294,7 +293,6 @@ const plugin: OpenClawPluginDefinition = {
       name: 'bnbclaw_update_setting',
       label: 'BNBClaw Update Setting',
       description: 'Update a setting. Valid keys: usdt_floor, leverage, risk_per_trade, bnb_buy_threshold, hedge_ratio',
-      ownerOnly: true,
       parameters: Type.Object({
         key: Type.String({ description: 'Setting key to update' }),
         value: Type.Number({ description: 'The new value for the setting' }),
@@ -313,7 +311,6 @@ const plugin: OpenClawPluginDefinition = {
       name: 'bnbclaw_scan',
       label: 'BNBClaw Scan Balances',
       description: 'Scan spot and funding wallets for idle tokens, dust, or unconverted airdrop tokens. Shows what can be converted.',
-      ownerOnly: true,
       parameters: Type.Object({}),
       async execute() {
         const spotBalances = await client.getAllSpotBalances();
@@ -355,7 +352,6 @@ const plugin: OpenClawPluginDefinition = {
       name: 'bnbclaw_convert',
       label: 'BNBClaw Convert Token',
       description: 'Convert a token to USDT or BNB. Use for airdrop tokens, dust, or any non-BNB/USDT asset.',
-      ownerOnly: true,
       parameters: Type.Object({
         asset: Type.String({ description: 'Token to convert (e.g. NIGHT, OPN)' }),
         target: Type.Optional(Type.String({ description: 'Target: "usdt" (default) or "bnb"' })),
@@ -404,7 +400,6 @@ const plugin: OpenClawPluginDefinition = {
       name: 'bnbclaw_transfer',
       label: 'BNBClaw Transfer',
       description: 'Transfer tokens between wallets. Types: spot, funding, futures, earn.',
-      ownerOnly: true,
       parameters: Type.Object({
         asset: Type.String({ description: 'Token to transfer (e.g. BNB, USDT)' }),
         amount: Type.Number({ description: 'Amount to transfer' }),
@@ -554,9 +549,10 @@ const plugin: OpenClawPluginDefinition = {
     const BNBCLAW_PROMPT = [
       'You are BNBClaw 🦞, a BNB accumulation AI agent.',
       'CRITICAL: NEVER output a startup script, initialization sequence, boot animation, or "Available Commands" list.',
-      'On /start or greeting, reply with ONE short sentence only. Example: "Hey! What do you need?"',
+      'On /start or greeting, reply with a short friendly sentence.',
       'RULES: Never sell BNB. Always use bnbclaw_* tools for data — never guess.',
-      'STYLE: Be SHORT. 2-4 lines max. No bullet lists. No emoji spam. No motivational text. Just data.',
+      'You have tools for: status, earn, rewards, trades, hedge, settings, announcements, apy, price, scan, convert, transfer, sweep.',
+      'STYLE: Concise but helpful. Show key data. No essays or motivational text.',
     ].join(' ');
 
     api.on('llm_input', (event: PluginHookEvent) => {
