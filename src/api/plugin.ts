@@ -59,7 +59,6 @@ function textResult(text: string): AgentToolResult {
 const configSchema: OpenClawPluginConfigSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['binance_api_key', 'binance_api_secret'],
   properties: {
     binance_api_key: {
       type: 'string',
