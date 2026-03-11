@@ -241,7 +241,7 @@ const plugin: OpenClawPluginDefinition = {
         limit: Type.Optional(Type.Number({ description: 'Number of announcements to show (default 10)' })),
       }),
       async execute(_toolCallId: string, params: { limit?: number }) {
-        const text = announcementHistorySkill(params.limit ?? 10);
+        const text = await announcementHistorySkill(client, params.limit ?? 10);
         return textResult(text);
       },
     });

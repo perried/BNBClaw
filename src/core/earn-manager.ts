@@ -155,10 +155,27 @@ export class EarnManager {
   }
 
   // ── Dust Cleanup (weekly) ──────────────────────────────
+  // IMPORTANT: Only converts truly tiny leftover dust to BNB.
+  // Airdrop and Launchpool tokens are sold to USDT first by catchMissedRewards().
 
   async cleanupDust(): Promise<void> {
+    // First, sell any unclaimed airdrop/launchpool rewards to USDT
+    await this.catchMissedRewards();
+
     try {
-      const result = await this.client.convertSmallBalance();
+      // Get dust-eligible assets, but exclude any that were just received
+      // as rewards (those should already be sold to USDT above)
+      const recentDividends = await this.client.getAssetDividend({ limit: 20 });
+      const recentRewardAssets = new Set(
+        recentDividends
+          .filter(d => {
+            const source = this.classifySource(d.enInfo);
+            return source === 'AIRDROP' || source === 'LAUNCHPOOL' || source === 'DISTRIBUTION';
+          })
+          .map(d => d.asset)
+      );
+
+      const result = await this.client.convertSmallBalance(recentRewardAssets);
       const bnb = parseFloat(result.totalServiceChargeInBNB || '0');
       if (bnb > 0) {
         log.info(`Dust cleanup: converted to ${bnb} BNB`);

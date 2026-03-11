@@ -354,7 +354,7 @@ export class BinanceClient {
     });
   }
 
-  async convertSmallBalance(): Promise<{ totalTransferBtc: string; totalServiceChargeInBNB: string }> {
+  async convertSmallBalance(excludeAssets?: Set<string>): Promise<{ totalTransferBtc: string; totalServiceChargeInBNB: string }> {
     // Get dust-convertible assets first
     const dustInfo = await this.spot<{ details: Array<{ asset: string; toBNB: string }> }>({
       method: 'POST',
@@ -363,7 +363,8 @@ export class BinanceClient {
     });
     const dustAssets = dustInfo.details
       ?.filter((d) => parseFloat(d.toBNB) > 0)
-      .map((d) => d.asset);
+      .map((d) => d.asset)
+      .filter((a) => a !== 'BNB' && a !== 'USDT' && !(excludeAssets?.has(a)));
 
     if (!dustAssets || dustAssets.length === 0) {
       return { totalTransferBtc: '0', totalServiceChargeInBNB: '0' };

@@ -184,7 +184,7 @@ async function main(): Promise<void> {
       updateSettingSkill(args.key as any, args.value)
     );
     llm.registerTool('announcements', async (args: { limit?: number }) =>
-      announcementHistorySkill(args.limit ?? 10)
+      announcementHistorySkill(client, args.limit ?? 10)
     );
 
     telegram.setLlmRouter(llm);
