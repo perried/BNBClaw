@@ -318,10 +318,15 @@ export class BinanceClient {
     startTime?: number;
     endTime?: number;
   }): Promise<AssetDividend[]> {
+    const merged = { limit: 20, ...params };
+    // Binance requires endTime when startTime is provided
+    if (merged.startTime && !merged.endTime) {
+      merged.endTime = Date.now();
+    }
     const data = await this.spot<{ rows: AssetDividend[]; total: number }>({
       method: 'GET',
       path: '/sapi/v1/asset/assetDividend',
-      params: { limit: 20, ...params },
+      params: merged,
       signed: true,
     });
     return data.rows ?? [];
