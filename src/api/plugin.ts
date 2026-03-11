@@ -179,7 +179,7 @@ const plugin: OpenClawPluginDefinition = {
     api.registerTool({
       name: 'bnbclaw_earn',
       label: 'BNBClaw Earn',
-      description: 'Show Simple Earn positions, APY, Launchpool participation, and recent reward distributions',
+      description: 'Show Simple Earn positions and APY from Binance API. Also shows locally tracked reward conversions from DB.',
       parameters: Type.Object({}),
       async execute() {
         const text = await earnStatusSkill({ client });
@@ -190,7 +190,7 @@ const plugin: OpenClawPluginDefinition = {
     api.registerTool({
       name: 'bnbclaw_rewards',
       label: 'BNBClaw Rewards',
-      description: 'Show reward history: airdrops, Launchpool tokens, earn interest over last N days',
+      description: 'LIVE from Binance API: shows all distributions (HODLer Airdrops, Launchpool, BNB Vault, Flexible, Locked) over last N days. Use this for any question about rewards, distributions, airdrops, or what tokens were received.',
       parameters: Type.Object({
         days: Type.Optional(Type.Number({ description: 'Number of days to look back (default 30)' })),
       }),
@@ -236,7 +236,7 @@ const plugin: OpenClawPluginDefinition = {
     api.registerTool({
       name: 'bnbclaw_announcements',
       label: 'BNBClaw Announcements',
-      description: 'Show recent Binance announcements: HODLer airdrops, Launchpool, Megadrop',
+      description: 'Show Binance announcements stored in local DB. Only contains announcements seen since BNBClaw started monitoring. For historical reward data, use bnbclaw_rewards instead.',
       parameters: Type.Object({
         limit: Type.Optional(Type.Number({ description: 'Number of announcements to show (default 10)' })),
       }),
