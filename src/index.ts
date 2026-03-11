@@ -166,7 +166,7 @@ async function main(): Promise<void> {
       earnStatusSkill({ client })
     );
     llm.registerTool('rewards', async (args: { days?: number }) =>
-      rewardHistorySkill(args.days ?? 30)
+      rewardHistorySkill(client, args.days ?? 30)
     );
     llm.registerTool('trades', async () =>
       tradeHistorySkill()

@@ -195,7 +195,7 @@ const plugin: OpenClawPluginDefinition = {
         days: Type.Optional(Type.Number({ description: 'Number of days to look back (default 30)' })),
       }),
       async execute(_toolCallId: string, params: { days?: number }) {
-        const text = rewardHistorySkill(params.days ?? 30);
+        const text = await rewardHistorySkill(client, params.days ?? 30);
         return textResult(text);
       },
     });
