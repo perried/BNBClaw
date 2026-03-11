@@ -290,24 +290,4 @@ export function getAllSettings(): Record<string, string> {
   return settings;
 }
 
-// ── Seen Announcements ───────────────────────────────────
 
-export function isAnnouncementSeen(code: string): boolean {
-  const db = getDb();
-  const row = db.prepare(`SELECT 1 FROM seen_announcements WHERE code = ?`).get(code);
-  return !!row;
-}
-
-export function markAnnouncementSeen(code: string, title: string): void {
-  const db = getDb();
-  db.prepare(
-    `INSERT OR IGNORE INTO seen_announcements (code, title, seen_at) VALUES (?, ?, ?)`
-  ).run(code, title, new Date().toISOString());
-}
-
-export function getRecentAnnouncements(limit = 10): Array<{ code: string; title: string; seen_at: string }> {
-  const db = getDb();
-  return db
-    .prepare(`SELECT code, title, seen_at FROM seen_announcements ORDER BY seen_at DESC LIMIT ?`)
-    .all(limit) as Array<{ code: string; title: string; seen_at: string }>;
-}

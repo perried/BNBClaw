@@ -84,15 +84,6 @@ const TOOLS: ToolDef[] = [
       required: ['key', 'value'],
     },
   },
-  {
-    name: 'announcements',
-    description: 'Show recent Binance announcements tracked by BNBClaw: HODLer airdrops, Launchpool, Megadrop. Use for questions about airdrops, announcements, new listings, or upcoming drops.',
-    parameters: {
-      type: 'object',
-      properties: { limit: { type: 'number', description: 'Number of announcements to show (default 10)' } },
-      required: [],
-    },
-  },
 ];
 
 export class LlmRouter {

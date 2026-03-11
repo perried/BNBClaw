@@ -27,7 +27,6 @@ import type {
 
 import { BinanceClient } from './binance-client.js';
 import { BinanceWs } from './binance-ws.js';
-import { AnnouncementMonitor } from '../core/announcement-monitor.js';
 import { EarnManager } from '../core/earn-manager.js';
 import { EventScheduler } from '../core/event-scheduler.js';
 import { TradeEngine } from '../core/trade-engine.js';
@@ -41,7 +40,6 @@ import { earnStatusSkill, moveBnbToEarnSkill } from '../skills/earn.js';
 import { tradeHistorySkill } from '../skills/trade.js';
 import { rewardHistorySkill } from '../skills/rewards.js';
 import { showSettingsSkill, updateSettingSkill } from '../skills/settings.js';
-import { announcementHistorySkill } from '../skills/announcements.js';
 import { hedgeStatusSkill } from '../skills/hedge.js';
 import { apySkill } from '../skills/apy.js';
 import { getEnvConfig, getSettings } from '../config/settings.js';
@@ -160,8 +158,6 @@ const plugin: OpenClawPluginDefinition = {
     const hedgeManager = new HedgeManager(client, notify);
     const strategy = new Strategy(client);
     const accumulator = new Accumulator(client, notify);
-    const announcementMonitor = new AnnouncementMonitor(notify);
-
     // ── LLM-callable Tools ────────────────────────────────
 
     // Read-only tools — anyone in the channel can query these
@@ -485,7 +481,6 @@ const plugin: OpenClawPluginDefinition = {
 
     const heartbeat = new HeartbeatScheduler();
     registerHeartbeats(heartbeat, {
-      announcementMonitor,
       earnManager,
       eventScheduler,
       hedgeManager,

@@ -6,7 +6,7 @@ import { BinanceWs } from './api/binance-ws.js';
 import { WebhookServer } from './api/webhook-server.js';
 import { TelegramBot } from './api/telegram.js';
 import { LlmRouter } from './api/llm-router.js';
-import { AnnouncementMonitor } from './core/announcement-monitor.js';
+
 import { EarnManager } from './core/earn-manager.js';
 import { EventScheduler } from './core/event-scheduler.js';
 import { TradeEngine } from './core/trade-engine.js';
@@ -21,7 +21,6 @@ import { tradeHistorySkill } from './skills/trade.js';
 import { rewardHistorySkill } from './skills/rewards.js';
 import { showSettingsSkill, updateSettingSkill } from './skills/settings.js';
 import { hedgeStatusSkill } from './skills/hedge.js';
-import { announcementHistorySkill } from './skills/announcements.js';
 import { getEnvConfig, getSettings } from './config/settings.js';
 import { getDb, closeDb } from './db/database.js';
 import { createLogger } from './utils/logger.js';
@@ -74,8 +73,6 @@ async function main(): Promise<void> {
   const hedgeManager = new HedgeManager(client, notify);
   const strategy = new Strategy(client);
   const accumulator = new Accumulator(client, notify);
-  const announcementMonitor = new AnnouncementMonitor(notify);
-
   // Wire up WebSocket events
   ws.on('balanceUpdate', async (event: { asset: string; delta: number }) => {
     await earnManager.onBalanceUpdate(event.asset, event.delta);
@@ -130,7 +127,6 @@ async function main(): Promise<void> {
   // Start heartbeat
   const heartbeat = new HeartbeatScheduler();
   registerHeartbeats(heartbeat, {
-    announcementMonitor,
     earnManager,
     eventScheduler,
     hedgeManager,
@@ -145,9 +141,6 @@ async function main(): Promise<void> {
   } catch (err) {
     log.warn('Initial earn sweep failed — will retry on next heartbeat', err);
   }
-
-  // Seed existing announcements so we only alert on NEW ones
-  await announcementMonitor.seedExisting();
 
   // Set up LLM router — all Telegram messages route through the LLM
   if (!env.llmApiKey) {
@@ -183,10 +176,6 @@ async function main(): Promise<void> {
     llm.registerTool('update_setting', async (args: { key: string; value: number }) =>
       updateSettingSkill(args.key as any, args.value)
     );
-    llm.registerTool('announcements', async (args: { limit?: number }) =>
-      announcementHistorySkill(client, args.limit ?? 10)
-    );
-
     telegram.setLlmRouter(llm);
     log.info(`LLM brain active: ${env.llmModel} via ${env.llmBaseUrl}`);
   }
