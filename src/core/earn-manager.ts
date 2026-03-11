@@ -67,19 +67,37 @@ export class EarnManager {
 
   async heartbeat(): Promise<void> {
     await this.sweepIdleBnb();
+    await this.sweepFundingBnb();
     await this.catchMissedRewards();
   }
 
   private async sweepIdleBnb(): Promise<void> {
     try {
       const { free } = await this.client.getSpotBalance('BNB');
-      if (free > 0.01) {
+      if (free > 0.001) {
         await this.client.subscribeEarn('BNB', free);
-        log.info(`Swept ${free} idle BNB to Simple Earn`);
-        this.notify(`🦞 Moved ${free.toFixed(4)} idle BNB to Simple Earn.`);
+        log.info(`Swept ${free} idle BNB from spot to Simple Earn`);
+        this.notify(`🦞 Found ${free.toFixed(4)} BNB in spot → moved to Simple Earn.`);
       }
     } catch (err) {
       log.error('Failed to sweep BNB to earn', err);
+    }
+  }
+
+  private async sweepFundingBnb(): Promise<void> {
+    try {
+      const funding = await this.client.getFundingBalance('BNB');
+      const bnb = funding.find(b => b.asset === 'BNB');
+      const free = parseFloat(bnb?.free ?? '0');
+      if (free > 0.001) {
+        // Transfer funding → spot, then spot → earn
+        await this.client.universalTransfer('FUNDING_MAIN', 'BNB', free);
+        await this.client.subscribeEarn('BNB', free);
+        log.info(`Swept ${free} BNB from funding → Simple Earn`);
+        this.notify(`🦞 Found ${free.toFixed(4)} BNB in funding wallet → moved to Simple Earn.`);
+      }
+    } catch (err) {
+      log.error('Failed to sweep funding BNB', err);
     }
   }
 
@@ -93,34 +111,28 @@ export class EarnManager {
         const amount = parseFloat(div.amount);
         const source = this.classifySource(div.enInfo);
 
-        if (div.asset === 'BNB' || div.asset === 'USDT') {
-          // Log BNB/USDT rewards but don't sell
-          insertReward({
-            timestamp: new Date(div.divTime).toISOString(),
-            source,
-            asset: div.asset,
-            amount,
-            tran_id: div.tranId,
-            converted_to: null,
-            converted_amount: null,
-          });
-          continue;
-        }
-
-        const usdtAmount = await this.sellToUsdt(div.asset, amount);
-
+        // Record in DB
         insertReward({
           timestamp: new Date(div.divTime).toISOString(),
           source,
           asset: div.asset,
           amount,
           tran_id: div.tranId,
-          converted_to: usdtAmount > 0 ? 'USDT' : null,
-          converted_amount: usdtAmount > 0 ? usdtAmount : null,
+          converted_to: null,
+          converted_amount: null,
         });
 
-        if (usdtAmount > 0) {
-          this.notify(`🦞 Sold ${amount} ${div.asset} (${source}) → $${usdtAmount.toFixed(2)} USDT`);
+        // Notify on notable distributions
+        if (source === 'AIRDROP' || source === 'LAUNCHPOOL') {
+          this.notify(
+            `🎁 New ${div.enInfo}: +${div.amount} ${div.asset}\n` +
+            `Use "convert ${div.asset}" to sell to USDT, or "convert ${div.asset} BNB" to convert to BNB.`
+          );
+        } else if (div.asset !== 'BNB' && div.asset !== 'USDT') {
+          this.notify(
+            `🦞 New distribution: +${div.amount} ${div.asset} (${div.enInfo})\n` +
+            `Use "convert ${div.asset}" to sell.`
+          );
         }
       }
     } catch (err) {

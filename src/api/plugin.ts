@@ -3,8 +3,7 @@
  *
  * Proper OpenClawPluginDefinition with:
  *   - configSchema for validated gateway configuration
- *   - 8 LLM-callable tools (with ownerOnly on mutating ops)
- *   - 1 background service (heartbeat + WebSocket streams)
+ *   - 12 LLM-callable tools (with ownerOnly on mutating ops) *   - 1 background service (heartbeat + WebSocket streams)
  *   - 1 HTTP route (TradingView webhook)
  *   - Lifecycle hooks (gateway_start, gateway_stop, heartbeat, after_tool_call)
  *   - PluginRuntime for notifications via channel.reply
@@ -44,6 +43,7 @@ import { rewardHistorySkill } from '../skills/rewards.js';
 import { showSettingsSkill, updateSettingSkill } from '../skills/settings.js';
 import { announcementHistorySkill } from '../skills/announcements.js';
 import { hedgeStatusSkill } from '../skills/hedge.js';
+import { apySkill } from '../skills/apy.js';
 import { getEnvConfig, getSettings } from '../config/settings.js';
 import { getDb, closeDb } from '../db/database.js';
 
@@ -246,6 +246,37 @@ const plugin: OpenClawPluginDefinition = {
       },
     });
 
+    api.registerTool({
+      name: 'bnbclaw_apy',
+      label: 'BNBClaw APY Rates',
+      description: 'LIVE from Binance API: Show Simple Earn APY rates for flexible and locked products. Optionally filter by asset.',
+      parameters: Type.Object({
+        asset: Type.Optional(Type.String({ description: 'Filter by asset (e.g. BNB, USDT). Omit to show top rates.' })),
+      }),
+      async execute(_toolCallId: string, params: { asset?: string }) {
+        const text = await apySkill(client, params.asset);
+        return textResult(text);
+      },
+    });
+
+    api.registerTool({
+      name: 'bnbclaw_price',
+      label: 'BNBClaw Price',
+      description: 'LIVE from Binance API: Get current price of a token in USDT.',
+      parameters: Type.Object({
+        symbol: Type.Optional(Type.String({ description: 'Trading pair (default BNBUSDT). Examples: BNBUSDT, BTCUSDT, ETHUSDT' })),
+      }),
+      async execute(_toolCallId: string, params: { symbol?: string }) {
+        const symbol = (params.symbol || 'BNBUSDT').toUpperCase();
+        try {
+          const price = await client.getPrice(symbol);
+          return textResult(`${symbol}: $${price}`);
+        } catch (err: any) {
+          return textResult(`Failed to get price for ${symbol}: ${err.message}`);
+        }
+      },
+    });
+
     // Mutating tools — ownerOnly so only the account owner can execute
     api.registerTool({
       name: 'bnbclaw_sweep',
@@ -275,6 +306,146 @@ const plugin: OpenClawPluginDefinition = {
         }
         const text = updateSettingSkill(params.key as any, params.value);
         return textResult(text);
+      },
+    });
+
+    api.registerTool({
+      name: 'bnbclaw_scan',
+      label: 'BNBClaw Scan Balances',
+      description: 'Scan spot and funding wallets for idle tokens, dust, or unconverted airdrop tokens. Shows what can be converted.',
+      ownerOnly: true,
+      parameters: Type.Object({}),
+      async execute() {
+        const spotBalances = await client.getAllSpotBalances();
+        const fundingBalances = await client.getFundingBalance();
+
+        let msg = '🦞 Wallet Scan\n━━━━━━━━━━━━━━━━━━━━\n';
+        let found = false;
+
+        if (spotBalances.length > 0) {
+          msg += '\n📦 Spot:\n';
+          for (const b of spotBalances) {
+            msg += `  ${b.asset}: ${b.free}${b.locked > 0 ? ` (locked: ${b.locked})` : ''}\n`;
+            found = true;
+          }
+        }
+
+        if (fundingBalances.length > 0) {
+          msg += '\n💰 Funding:\n';
+          for (const b of fundingBalances) {
+            const free = parseFloat(b.free);
+            if (free > 0) {
+              msg += `  ${b.asset}: ${b.free}\n`;
+              found = true;
+            }
+          }
+        }
+
+        if (!found) {
+          msg += 'All wallets clean. No idle tokens found.';
+        } else {
+          msg += '\nUse "convert [ASSET] usdt" or "convert [ASSET] bnb" to convert.';
+          msg += '\nUse "transfer [ASSET] [from] [to]" to move between wallets.';
+        }
+        return textResult(msg);
+      },
+    });
+
+    api.registerTool({
+      name: 'bnbclaw_convert',
+      label: 'BNBClaw Convert Token',
+      description: 'Convert a token to USDT or BNB. Use for airdrop tokens, dust, or any non-BNB/USDT asset.',
+      ownerOnly: true,
+      parameters: Type.Object({
+        asset: Type.String({ description: 'Token to convert (e.g. NIGHT, OPN)' }),
+        target: Type.Optional(Type.String({ description: 'Target: "usdt" (default) or "bnb"' })),
+      }),
+      async execute(_toolCallId: string, params: { asset: string; target?: string }) {
+        const asset = params.asset.toUpperCase();
+        const target = (params.target || 'usdt').toUpperCase();
+
+        if (asset === 'BNB' && target === 'USDT') {
+          return textResult('🦞 Rule violation: Never sell BNB.');
+        }
+        if (target !== 'USDT' && target !== 'BNB') {
+          return textResult('Target must be "usdt" or "bnb".');
+        }
+
+        try {
+          const { free } = await client.getSpotBalance(asset);
+          if (free <= 0) {
+            return textResult(`No ${asset} available in spot wallet.`);
+          }
+
+          let received = 0;
+          const pair = `${asset}${target}`;
+          try {
+            const info = await client.getExchangeInfo(pair);
+            if (info) {
+              const order = await client.placeSpotOrder('SELL', free, pair);
+              received = parseFloat(order.executedQty) * parseFloat(order.avgPrice);
+            } else {
+              throw new Error('no pair');
+            }
+          } catch {
+            const quote = await client.getConvertQuote(asset, target, free);
+            await client.acceptConvertQuote(quote.quoteId);
+            received = parseFloat(quote.toAmount);
+          }
+
+          return textResult(`🦞 Converted ${free} ${asset} → ${received.toFixed(4)} ${target}`);
+        } catch (err: any) {
+          return textResult(`Failed to convert ${asset}: ${err.message}`);
+        }
+      },
+    });
+
+    api.registerTool({
+      name: 'bnbclaw_transfer',
+      label: 'BNBClaw Transfer',
+      description: 'Transfer tokens between wallets. Types: spot, funding, futures, earn.',
+      ownerOnly: true,
+      parameters: Type.Object({
+        asset: Type.String({ description: 'Token to transfer (e.g. BNB, USDT)' }),
+        amount: Type.Number({ description: 'Amount to transfer' }),
+        from: Type.String({ description: 'Source: spot, funding, futures' }),
+        to: Type.String({ description: 'Destination: spot, funding, futures, earn' }),
+      }),
+      async execute(_toolCallId: string, params: { asset: string; amount: number; from: string; to: string }) {
+        const asset = params.asset.toUpperCase();
+        const from = params.from.toLowerCase();
+        const to = params.to.toLowerCase();
+
+        // Handle earn specially
+        if (to === 'earn') {
+          if (from !== 'spot') {
+            // Transfer to spot first
+            const typeMap: Record<string, string> = { funding: 'FUNDING_MAIN', futures: 'UMFUTURE_MAIN' };
+            const transferType = typeMap[from];
+            if (!transferType) return textResult(`Invalid source: ${from}`);
+            await client.universalTransfer(transferType, asset, params.amount);
+          }
+          await client.subscribeEarn(asset, params.amount);
+          return textResult(`🦞 Transferred ${params.amount} ${asset} from ${from} → Simple Earn.`);
+        }
+
+        const typeMap: Record<string, string> = {
+          'spot_funding': 'MAIN_FUNDING',
+          'funding_spot': 'FUNDING_MAIN',
+          'spot_futures': 'MAIN_UMFUTURE',
+          'futures_spot': 'UMFUTURE_MAIN',
+          'funding_futures': 'FUNDING_UMFUTURE',
+          'futures_funding': 'UMFUTURE_FUNDING',
+        };
+
+        const key = `${from}_${to}`;
+        const transferType = typeMap[key];
+        if (!transferType) {
+          return textResult(`Invalid transfer: ${from} → ${to}. Valid: spot, funding, futures, earn.`);
+        }
+
+        await client.universalTransfer(transferType, asset, params.amount);
+        return textResult(`🦞 Transferred ${params.amount} ${asset}: ${from} → ${to}.`);
       },
     });
 
@@ -381,10 +552,11 @@ const plugin: OpenClawPluginDefinition = {
 
     // Inject BNBClaw identity into every LLM call
     const BNBCLAW_PROMPT = [
-      'You are BNBClaw 🦞, an AI agent that maximizes BNB utility on Binance.',
-      'You never sell BNB — you only accumulate it.',
-      'Always use your bnbclaw_* tools to answer questions about portfolio, earnings, trades, hedging, and settings.',
-      'Be concise, data-driven, and crypto-savvy.',
+      'You are BNBClaw 🦞, a BNB accumulation AI agent.',
+      'RULES: Never sell BNB. Always use bnbclaw_* tools for data — never guess.',
+      'STYLE: Be SHORT. Max 3-5 lines for simple questions. Show data, skip fluff.',
+      'No bullet lists unless showing multiple items. No emoji spam. No motivational text.',
+      'If a tool returns data, summarize the key numbers in 1-2 sentences.',
     ].join(' ');
 
     api.on('llm_input', (event: PluginHookEvent) => {
@@ -402,7 +574,7 @@ const plugin: OpenClawPluginDefinition = {
       }
     });
 
-    logger.info('🦞 BNBClaw plugin registered — 8 tools, 1 service, 1 route');
+    logger.info('🦞 BNBClaw plugin registered — 13 tools, 1 service, 1 route');
   },
 };
 

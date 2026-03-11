@@ -60,6 +60,28 @@ export interface ConvertQuote {
   toAmount: string;
 }
 
+export interface FlexibleProduct {
+  asset: string;
+  productId: string;
+  latestAnnualPercentageRate: string;
+  canPurchase: boolean;
+  canRedeem: boolean;
+  tierAnnualPercentageRate: Record<string, string>;
+  minPurchaseAmount: string;
+  status: string;
+}
+
+export interface LockedProduct {
+  projectId: string;
+  asset: string;
+  duration: number;
+  annualPercentageRate: string;
+  canPurchase: boolean;
+  minPurchaseAmount: string;
+  maxPurchaseAmountPerUser: string;
+  status: string;
+}
+
 export interface OrderResult {
   orderId: number;
   symbol: string;

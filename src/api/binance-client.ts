@@ -9,6 +9,8 @@ import type {
   FundingRate,
   AssetDividend,
   ConvertQuote,
+  FlexibleProduct,
+  LockedProduct,
   OrderResult,
 } from './types.js';
 
@@ -210,6 +212,81 @@ export class BinanceClient {
       params: { productId: pos.productId, amount },
       signed: true,
     });
+  }
+
+  // ── Simple Earn Product Lists ────────────────────────────
+
+  async getFlexibleProducts(asset?: string): Promise<FlexibleProduct[]> {
+    const params: Record<string, string | number> = { size: 100 };
+    if (asset) params.asset = asset;
+    const data = await this.spot<{ rows: FlexibleProduct[]; total: number }>({
+      method: 'GET',
+      path: '/sapi/v1/simple-earn/flexible/list',
+      params,
+      signed: true,
+    });
+    return data.rows ?? [];
+  }
+
+  async getLockedProducts(asset?: string): Promise<LockedProduct[]> {
+    const params: Record<string, string | number> = { size: 100 };
+    if (asset) params.asset = asset;
+    const data = await this.spot<{ rows: LockedProduct[]; total: number }>({
+      method: 'GET',
+      path: '/sapi/v1/simple-earn/locked/list',
+      params,
+      signed: true,
+    });
+    return data.rows ?? [];
+  }
+
+  async subscribeLocked(projectId: string, amount: number): Promise<{ purchaseId: number; success: boolean }> {
+    return this.spot({
+      method: 'POST',
+      path: '/sapi/v1/simple-earn/locked/subscribe',
+      params: { projectId, amount },
+      signed: true,
+    });
+  }
+
+  // ── Funding Wallet ───────────────────────────────────────
+
+  async getFundingBalance(asset?: string): Promise<Array<{ asset: string; free: string; locked: string; freeze: string }>> {
+    const data = await this.spot<Array<{ asset: string; free: string; locked: string; freeze: string }>>({
+      method: 'POST',
+      path: '/sapi/v1/asset/get-funding-asset',
+      params: asset ? { asset } : {},
+      signed: true,
+    });
+    return data.filter(b => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0);
+  }
+
+  // ── Universal Transfer ───────────────────────────────────
+
+  async universalTransfer(
+    type: string,
+    asset: string,
+    amount: number
+  ): Promise<{ tranId: number }> {
+    return this.spot({
+      method: 'POST',
+      path: '/sapi/v1/asset/transfer',
+      params: { type, asset, amount },
+      signed: true,
+    });
+  }
+
+  // ── All Spot Balances (non-zero) ─────────────────────────
+
+  async getAllSpotBalances(): Promise<Array<{ asset: string; free: number; locked: number }>> {
+    const data = await this.spot<{ balances: SpotBalance[] }>({
+      method: 'GET',
+      path: '/api/v3/account',
+      signed: true,
+    });
+    return data.balances
+      .map(b => ({ asset: b.asset, free: parseFloat(b.free), locked: parseFloat(b.locked) }))
+      .filter(b => b.free > 0 || b.locked > 0);
   }
 
   // ── Trading ──────────────────────────────────────────────
