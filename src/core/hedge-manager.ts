@@ -1,5 +1,6 @@
 import type { BinanceClient } from '../api/binance-client.js';
 import { getSettings } from '../config/settings.js';
+import { getSetting, setSetting } from '../db/queries.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('hedge-manager');
@@ -7,11 +8,16 @@ const log = createLogger('hedge-manager');
 export class HedgeManager {
   private client: BinanceClient;
   private notify: (msg: string) => void;
-  private active = false;
+  private active: boolean;
 
   constructor(client: BinanceClient, notify: (msg: string) => void) {
     this.client = client;
     this.notify = notify;
+    // Restore hedge state from DB
+    this.active = getSetting('hedge_active') === 'true';
+    if (this.active) {
+      log.info('Hedge state restored: active');
+    }
   }
 
   // ── Activate Hedge ─────────────────────────────────────
@@ -29,6 +35,7 @@ export class HedgeManager {
     await this.client.placeFuturesOrder('SELL', targetShort, settings.leverage);
 
     this.active = true;
+    setSetting('hedge_active', 'true');
     log.info(`Hedge activated: short ${targetShort.toFixed(2)} BNB (${settings.hedge_ratio * 100}%)`);
     this.notify(
       `🦞 Hedge activated!\n` +
@@ -57,6 +64,7 @@ export class HedgeManager {
     }
 
     this.active = false;
+    setSetting('hedge_active', 'false');
     this.notify('🦞 Hedge deactivated. Position closed.');
   }
 

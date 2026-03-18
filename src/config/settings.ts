@@ -33,7 +33,35 @@ export function getSettings(): Settings {
   };
 }
 
+const SETTING_BOUNDS: Record<string, { min: number; max: number }> = {
+  usdt_floor: { min: 0, max: 100_000 },
+  leverage: { min: 1, max: 20 },
+  risk_per_trade: { min: 0.01, max: 0.20 },
+  bnb_buy_threshold: { min: 5, max: 10_000 },
+  hedge_ratio: { min: 0, max: 1.0 },
+};
+
+export function validateSetting(key: keyof Settings, value: number | boolean): string | null {
+  if (key === 'webhook_enabled') {
+    if (typeof value !== 'boolean') return 'webhook_enabled must be true or false.';
+    return null;
+  }
+
+  if (typeof value !== 'number' || !isFinite(value)) {
+    return `${key} must be a finite number.`;
+  }
+
+  const bounds = SETTING_BOUNDS[key];
+  if (bounds && (value < bounds.min || value > bounds.max)) {
+    return `${key} must be between ${bounds.min} and ${bounds.max}.`;
+  }
+
+  return null;
+}
+
 export function updateSetting(key: keyof Settings, value: number | boolean): void {
+  const error = validateSetting(key, value);
+  if (error) throw new Error(error);
   setSetting(key, String(value));
 }
 
@@ -47,7 +75,7 @@ export function getEnvConfig() {
     telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
     telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
     llmApiKey: process.env.LLM_API_KEY ?? '',
-    llmBaseUrl: process.env.LLM_BASE_URL ?? 'https://api.openai.com',
-    llmModel: process.env.LLM_MODEL ?? 'gpt-4o-mini',
+    llmBaseUrl: process.env.LLM_BASE_URL ?? 'https://openrouter.ai/api',
+    llmModel: process.env.LLM_MODEL ?? 'google/gemini-2.0-flash',
   };
 }

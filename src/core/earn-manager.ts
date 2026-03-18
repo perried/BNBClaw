@@ -1,7 +1,7 @@
 import type { BinanceClient } from '../api/binance-client.js';
 import { insertReward, isRewardProcessed } from '../db/queries.js';
 import { createLogger } from '../utils/logger.js';
-import type { RewardSource } from '../api/types.js';
+import { classifySource, sellToUsdt } from '../utils/reward-helpers.js';
 
 const log = createLogger('earn-manager');
 
@@ -41,11 +41,11 @@ export class EarnManager {
       return;
     }
 
-    const source = this.classifySource(match.enInfo);
+    const source = classifySource(match.enInfo);
     log.info(`Confirmed reward: ${match.amount} ${asset} from ${source}`);
 
     // Sell to USDT
-    const usdtAmount = await this.sellToUsdt(asset, parseFloat(match.amount));
+    const usdtAmount = await sellToUsdt(this.client, asset, parseFloat(match.amount));
 
     // Record in DB
     insertReward({
@@ -109,7 +109,7 @@ export class EarnManager {
         if (isRewardProcessed(div.tranId)) continue;
 
         const amount = parseFloat(div.amount);
-        const source = this.classifySource(div.enInfo);
+        const source = classifySource(div.enInfo);
 
         // Record in DB
         insertReward({
@@ -140,32 +140,6 @@ export class EarnManager {
     }
   }
 
-  // ── Sell to USDT ───────────────────────────────────────
-
-  private async sellToUsdt(asset: string, amount: number): Promise<number> {
-    if (asset === 'USDT') return amount; // Already USDT
-    try {
-      // Try spot market first
-      const pairExists = await this.client.getExchangeInfo(`${asset}USDT`);
-      if (pairExists) {
-        const order = await this.client.placeSpotOrder('SELL', amount, `${asset}USDT`);
-        const received = parseFloat(order.executedQty) * parseFloat(order.avgPrice);
-        log.info(`Sold ${amount} ${asset} via spot → ${received} USDT`);
-        return received;
-      }
-
-      // Fallback: Binance Convert API
-      const quote = await this.client.getConvertQuote(asset, 'USDT', amount);
-      const result = await this.client.acceptConvertQuote(quote.quoteId);
-      const received = parseFloat(quote.toAmount);
-      log.info(`Sold ${amount} ${asset} via Convert → ${received} USDT`);
-      return received;
-    } catch (err) {
-      log.error(`Failed to sell ${asset} to USDT`, err);
-      return 0;
-    }
-  }
-
   // ── Dust Cleanup (weekly) ──────────────────────────────
   // IMPORTANT: Only converts truly tiny leftover dust to BNB.
   // Airdrop and Launchpool tokens are sold to USDT first by catchMissedRewards().
@@ -181,7 +155,7 @@ export class EarnManager {
       const recentRewardAssets = new Set(
         recentDividends
           .filter(d => {
-            const source = this.classifySource(d.enInfo);
+            const source = classifySource(d.enInfo);
             return source === 'AIRDROP' || source === 'LAUNCHPOOL' || source === 'DISTRIBUTION';
           })
           .map(d => d.asset)
@@ -198,13 +172,4 @@ export class EarnManager {
     }
   }
 
-  // ── Helpers ────────────────────────────────────────────
-
-  private classifySource(enInfo: string): RewardSource {
-    const lower = enInfo.toLowerCase();
-    if (lower === 'launchpool') return 'LAUNCHPOOL';
-    if (lower.includes('airdrop') || lower.includes('hodler')) return 'AIRDROP';
-    if (lower === 'flexible' || lower === 'locked' || lower === 'bnb vault') return 'EARN_INTEREST';
-    return 'DISTRIBUTION';
-  }
 }

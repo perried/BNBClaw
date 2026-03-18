@@ -70,7 +70,7 @@ export function getTradeStats(days = 30): {
         COALESCE(SUM(CASE WHEN pnl_usdt < 0 THEN 1 ELSE 0 END), 0) as lossCount
       FROM trades WHERE status = 'CLOSED' AND timestamp >= ?`
     )
-    .get(since) as any;
+    .get(since) as { totalPnl: number; winCount: number; lossCount: number };
 
   // BNB bought from short profits
   const bnbRow = db
@@ -78,7 +78,7 @@ export function getTradeStats(days = 30): {
       `SELECT COALESCE(SUM(size_bnb), 0) as bnbBought
        FROM trades WHERE pnl_action = 'BUY_BNB' AND timestamp >= ?`
     )
-    .get(since) as any;
+    .get(since) as { bnbBought: number };
 
   return {
     totalPnl: row.totalPnl,
@@ -137,7 +137,7 @@ export function getRewardStats(days = 30): {
               COUNT(*) as count
        FROM rewards WHERE timestamp >= ?`
     )
-    .get(since) as any;
+    .get(since) as { totalUsdt: number; count: number };
 
   const sources = db
     .prepare(
@@ -162,7 +162,7 @@ export function getShortProfitBuffer(): number {
   const db = getDb();
   const row = db
     .prepare(`SELECT short_profit_buffer FROM accumulator WHERE id = 1`)
-    .get() as any;
+    .get() as { short_profit_buffer: number } | undefined;
   return row?.short_profit_buffer ?? 0;
 }
 
@@ -201,7 +201,7 @@ export function getLatestBnbSnapshot(): { earn_balance: number; spot_balance: nu
   const db = getDb();
   return db
     .prepare(`SELECT earn_balance, spot_balance, total FROM bnb_snapshots ORDER BY id DESC LIMIT 1`)
-    .get() as any ?? null;
+    .get() as { earn_balance: number; spot_balance: number; total: number } | undefined ?? null;
 }
 
 export function getBnbGrowth(days = 7): number {
@@ -209,10 +209,10 @@ export function getBnbGrowth(days = 7): number {
   const since = new Date(Date.now() - days * 86400000).toISOString();
   const oldest = db
     .prepare(`SELECT total FROM bnb_snapshots WHERE timestamp >= ? ORDER BY id ASC LIMIT 1`)
-    .get(since) as any;
+    .get(since) as { total: number } | undefined;
   const newest = db
     .prepare(`SELECT total FROM bnb_snapshots ORDER BY id DESC LIMIT 1`)
-    .get() as any;
+    .get() as { total: number } | undefined;
 
   if (!oldest || !newest) return 0;
   return newest.total - oldest.total;
@@ -270,7 +270,7 @@ export function deleteJobsByEvent(eventName: string): number {
 
 export function getSetting(key: string): string | null {
   const db = getDb();
-  const row = db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as any;
+  const row = db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as { value: string } | undefined;
   return row?.value ?? null;
 }
 

@@ -1,7 +1,7 @@
 import type { BinanceClient } from '../api/binance-client.js';
 import { insertReward, isRewardProcessed } from '../db/queries.js';
 import { createLogger } from '../utils/logger.js';
-import type { RewardSource } from '../api/types.js';
+import { classifySource, sellToUsdt } from '../utils/reward-helpers.js';
 
 const log = createLogger('accumulator');
 
@@ -34,9 +34,9 @@ export class Accumulator {
       const amount = parseFloat(div.amount);
 
       try {
-        const usdtAmount = await this.sellToUsdt(div.asset, amount);
+        const usdtAmount = await sellToUsdt(this.client, div.asset, amount);
 
-        const source = this.classifySource(div.enInfo);
+        const source = classifySource(div.enInfo);
         insertReward({
           timestamp: new Date(div.divTime).toISOString(),
           source,
@@ -57,27 +57,5 @@ export class Accumulator {
     }
 
     return { converted, totalUsdt };
-  }
-
-  private async sellToUsdt(asset: string, amount: number): Promise<number> {
-    // Try spot market first
-    const pairExists = await this.client.getExchangeInfo(`${asset}USDT`);
-    if (pairExists) {
-      const order = await this.client.placeSpotOrder('SELL', amount, `${asset}USDT`);
-      return parseFloat(order.executedQty) * parseFloat(order.avgPrice);
-    }
-
-    // Fallback: Convert API
-    const quote = await this.client.getConvertQuote(asset, 'USDT', amount);
-    await this.client.acceptConvertQuote(quote.quoteId);
-    return parseFloat(quote.toAmount);
-  }
-
-  private classifySource(enInfo: string): RewardSource {
-    const lower = enInfo.toLowerCase();
-    if (lower === 'launchpool') return 'LAUNCHPOOL';
-    if (lower.includes('airdrop') || lower.includes('hodler')) return 'AIRDROP';
-    if (lower === 'flexible' || lower === 'locked' || lower === 'bnb vault') return 'EARN_INTEREST';
-    return 'DISTRIBUTION';
   }
 }

@@ -22,39 +22,23 @@ import { showSettingsSkill, updateSettingSkill } from './skills/settings.js';
 import { hedgeStatusSkill } from './skills/hedge.js';
 import { getEnvConfig, getSettings } from './config/settings.js';
 import { getDb, closeDb } from './db/database.js';
+import { resolveCredentials, hasBinanceCredentials } from './utils/keystore.js';
 import { createLogger } from './utils/logger.js';
 
 const log = createLogger('main');
 
-// ── Main ─────────────────────────────────────────────────
+let heartbeat: HeartbeatScheduler | null = null;
 
-async function main(): Promise<void> {
+// ── Boot Agent ────────────────────────────────────────────
+// Called once Binance keys are available (either from .env or chat setup).
+
+async function bootAgent(telegram: TelegramBot): Promise<void> {
   const env = getEnvConfig();
+  const creds = resolveCredentials();
 
-  if (!env.binanceApiKey || !env.binanceApiSecret) {
-    log.error('Missing BINANCE_API_KEY or BINANCE_API_SECRET in .env');
-    process.exit(1);
-  }
-
-  // Initialize DB
-  getDb();
-  log.info('Database initialized');
-
-  // Initialize Telegram bot
-  const telegram = new TelegramBot(
-    env.telegramBotToken,
-    env.telegramChatId
-  );
-
-  // Auto-detect chat ID if not configured
-  if (env.telegramBotToken && !env.telegramChatId) {
-    const detected = await telegram.detectChatId();
-    if (detected) {
-      (telegram as any).chatId = detected;
-      log.info(`Telegram chat ID auto-detected: ${detected}`);
-    } else {
-      log.warn('Telegram: no chat ID and no messages found. Send a message to the bot first.');
-    }
+  if (!creds.binanceApiKey || !creds.binanceApiSecret) {
+    log.warn('Cannot boot agent — Binance credentials not available');
+    return;
   }
 
   function notify(msg: string): void {
@@ -63,7 +47,7 @@ async function main(): Promise<void> {
   }
 
   // Create core instances
-  const client = new BinanceClient(env.binanceApiKey, env.binanceApiSecret);
+  const client = new BinanceClient(creds.binanceApiKey, creds.binanceApiSecret);
   const earnManager = new EarnManager(client, notify);
   const eventScheduler = new EventScheduler(notify);
   const tradeEngine = new TradeEngine(client, notify);
@@ -100,7 +84,7 @@ async function main(): Promise<void> {
   }
 
   // Start heartbeat
-  const heartbeat = new HeartbeatScheduler();
+  heartbeat = new HeartbeatScheduler();
   registerHeartbeats(heartbeat, {
     earnManager,
     eventScheduler,
@@ -110,19 +94,20 @@ async function main(): Promise<void> {
   heartbeat.start();
   log.info('Heartbeat scheduler started');
 
-  // Initial sweep — make sure BNB is in Simple Earn
+  // Initial sweep
   try {
     await earnManager.heartbeat();
   } catch (err) {
     log.warn('Initial earn sweep failed — will retry on next heartbeat', err);
   }
 
-  // Set up LLM router — all Telegram messages route through the LLM
-  if (!env.llmApiKey) {
-    log.warn('LLM_API_KEY not set — Telegram messaging disabled. Set it in .env to enable.');
+  // Set up LLM router
+  const llmApiKey = creds.llmApiKey;
+  if (!llmApiKey) {
+    log.warn('LLM_API_KEY not set — AI chat disabled. Use /setup to add it.');
   } else {
     const llm = new LlmRouter({
-      apiKey: env.llmApiKey,
+      apiKey: llmApiKey,
       baseUrl: env.llmBaseUrl,
       model: env.llmModel,
     });
@@ -133,8 +118,8 @@ async function main(): Promise<void> {
     llm.registerTool('earn', async () =>
       earnStatusSkill({ client })
     );
-    llm.registerTool('rewards', async (args: { days?: number }) =>
-      rewardHistorySkill(client, args.days ?? 30)
+    llm.registerTool('rewards', async (args) =>
+      rewardHistorySkill(client, (args.days as number) ?? 30)
     );
     llm.registerTool('trades', async () =>
       tradeHistorySkill()
@@ -148,23 +133,64 @@ async function main(): Promise<void> {
     llm.registerTool('sweep', async () =>
       moveBnbToEarnSkill({ client, earnManager })
     );
-    llm.registerTool('update_setting', async (args: { key: string; value: number }) =>
-      updateSettingSkill(args.key as any, args.value)
+    llm.registerTool('update_setting', async (args) =>
+      updateSettingSkill(args.key as keyof import('./api/types.js').Settings, args.value as number)
     );
     telegram.setLlmRouter(llm);
     log.info(`LLM brain active: ${env.llmModel} via ${env.llmBaseUrl}`);
   }
 
-  // Start polling for Telegram messages
+  notify('🦞 BNBClaw is online! Type "status" to see your portfolio.');
+}
+
+// ── Main ─────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const env = getEnvConfig();
+
+  if (!env.telegramBotToken) {
+    log.error('TELEGRAM_BOT_TOKEN is required in .env — get one from @BotFather on Telegram');
+    process.exit(1);
+  }
+
+  // Initialize DB (needed for keystore + setup)
+  getDb();
+  log.info('Database initialized');
+
+  // Initialize Telegram bot
+  const telegram = new TelegramBot(env.telegramBotToken, env.telegramChatId);
+
+  // Auto-detect chat ID if not configured
+  if (!env.telegramChatId) {
+    const detected = await telegram.detectChatId();
+    if (detected) {
+      telegram.setChatId(detected);
+      log.info(`Telegram chat ID auto-detected: ${detected}`);
+    }
+  }
+
+  // Register setup completion callback
+  telegram.onSetup(async () => {
+    log.info('Setup complete — booting agent...');
+    await bootAgent(telegram);
+  });
+
+  // Start polling immediately — works for both setup flow and normal operation
   telegram.startPolling();
 
-  notify('🦞 BNBClaw is online! Type "status" to see your portfolio.');
+  // If keys are already available, boot the agent right away
+  if (hasBinanceCredentials()) {
+    log.info('Binance credentials found — booting agent');
+    await bootAgent(telegram);
+  } else {
+    log.info('No Binance credentials — waiting for chat setup. Send /start to the bot.');
+  }
 
   // Graceful shutdown
   const shutdown = async () => {
     log.info('Shutting down...');
     telegram.stopPolling();
-    heartbeat.stop();
+    if (heartbeat) heartbeat.stop();
     closeDb();
     process.exit(0);
   };

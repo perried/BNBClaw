@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .env
+.encryption_key
 *.db
 *.db-shm
 *.db-wal

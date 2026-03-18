@@ -19,9 +19,14 @@ export interface LlmRouterConfig {
 const SYSTEM_PROMPT = `You are BNBClaw 🦞 — a Binance AI agent that maximizes BNB utility.
 You help the user manage their BNB portfolio via Telegram.
 
+PERSONALITY:
+- You're warm, sharp, and a little playful — like a friend who's really good with money.
+- First interaction (/start or "hi"): introduce yourself with personality. Be curious about the user — ask what they'd like to call you, what they're working toward, etc. Keep it short (2-3 sentences). Do NOT list features or tools.
+- Follow-up messages: be concise and helpful. Show key data, skip fluff.
+- Use emoji naturally but don't overdo it.
+
 When the user asks something, call the appropriate function to get data. Then summarize
 the results in a natural, conversational way — like a helpful assistant, not a data dump.
-Keep responses concise and friendly. Use emoji where appropriate.
 
 If no function fits, answer conversationally but briefly. Always stay in character.
 
@@ -86,16 +91,40 @@ const TOOLS: ToolDef[] = [
   },
 ];
 
+interface ChatMessage {
+  role: string;
+  content?: string | null;
+  tool_calls?: Array<{
+    id: string;
+    type: string;
+    function: { name: string; arguments: string };
+  }>;
+  tool_call_id?: string;
+}
+
+interface ChatCompletionResponse {
+  choices: Array<{
+    message: {
+      content: string | null;
+      tool_calls?: Array<{
+        id: string;
+        type: string;
+        function: { name: string; arguments: string };
+      }>;
+    };
+  }>;
+}
+
 export class LlmRouter {
   private config: LlmRouterConfig;
-  private handlers: Map<string, (args: any) => Promise<string>> = new Map();
+  private handlers: Map<string, (args: Record<string, unknown>) => Promise<string>> = new Map();
 
   constructor(config: LlmRouterConfig) {
     this.config = config;
   }
 
   /** Register a function the LLM can call */
-  registerTool(name: string, handler: (args: any) => Promise<string>): void {
+  registerTool(name: string, handler: (args: Record<string, unknown>) => Promise<string>): void {
     this.handlers.set(name, handler);
   }
 
@@ -137,8 +166,8 @@ export class LlmRouter {
 
       // Otherwise return the LLM's text response
       return response.choices?.[0]?.message?.content || '🦞 I\'m not sure how to help with that.';
-    } catch (err: any) {
-      const msg = err?.message || String(err);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
       log.error('LLM routing failed', { error: msg });
       if (msg.includes('429') || msg.includes('rate')) {
         return '⚠️ Rate limited — please wait a moment and try again.';
@@ -147,7 +176,7 @@ export class LlmRouter {
     }
   }
 
-  private chatCompletion(messages: Array<Record<string, unknown>>, includeTools = true): Promise<any> {
+  private chatCompletion(messages: Array<ChatMessage>, includeTools = true): Promise<ChatCompletionResponse> {
     const url = new URL(`${this.config.baseUrl}/v1/chat/completions`);
     const isHttps = url.protocol === 'https:';
     const transport = isHttps ? https : http;

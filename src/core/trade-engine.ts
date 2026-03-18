@@ -109,7 +109,9 @@ export class TradeEngine {
 
   private async buyBnbWithBuffer(bufferUsdt: number): Promise<void> {
     try {
-      // Transfer USDT from futures to spot if needed
+      // Transfer USDT from futures wallet to spot wallet first
+      await this.client.universalTransfer('UMFUTURE_MAIN', 'USDT', bufferUsdt);
+
       const order = await this.client.placeSpotQuoteOrder('BUY', bufferUsdt, 'BNBUSDT');
       const bnbBought = parseFloat(order.executedQty);
 

@@ -455,37 +455,4 @@ export class BinanceClient {
     });
   }
 
-  // ── User Data Stream (for WebSocket) ────────────────────
-
-  async createSpotListenKey(): Promise<string> {
-    const data = await this.spot<{ listenKey: string }>({
-      method: 'POST',
-      path: '/api/v3/userDataStream',
-    });
-    return data.listenKey;
-  }
-
-  async keepAliveSpotListenKey(listenKey: string): Promise<void> {
-    await this.spot<void>({
-      method: 'POST',  // Binance uses PUT but we send listenKey as param
-      path: '/api/v3/userDataStream',
-      params: { listenKey },
-    });
-  }
-
-  async createFuturesListenKey(): Promise<string> {
-    const data = await this.futures<{ listenKey: string }>({
-      method: 'POST',
-      path: '/fapi/v1/listenKey',
-    });
-    return data.listenKey;
-  }
-
-  async keepAliveFuturesListenKey(listenKey: string): Promise<void> {
-    await this.futures<void>({
-      method: 'POST',
-      path: '/fapi/v1/listenKey',
-      params: { listenKey },
-    });
-  }
 }

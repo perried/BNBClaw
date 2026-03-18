@@ -41,7 +41,7 @@ import { rewardHistorySkill } from '../skills/rewards.js';
 import { showSettingsSkill, updateSettingSkill } from '../skills/settings.js';
 import { activateHedgeSkill, deactivateHedgeSkill, hedgeStatusSkill } from '../skills/hedge.js';
 import { apySkill } from '../skills/apy.js';
-import { getEnvConfig, getSettings } from '../config/settings.js';
+import { getEnvConfig, getSettings, validateSetting } from '../config/settings.js';
 import { getDb, closeDb } from '../db/database.js';
 
 // ── Helpers ──────────────────────────────────────────────
@@ -259,12 +259,15 @@ const plugin: OpenClawPluginDefinition = {
         symbol: Type.Optional(Type.String({ description: 'Trading pair (default BNBUSDT). Examples: BNBUSDT, BTCUSDT, ETHUSDT' })),
       }),
       async execute(_toolCallId: string, params: { symbol?: string }) {
-        const symbol = (params.symbol || 'BNBUSDT').toUpperCase();
+        const symbol = (params.symbol || 'BNBUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '');
+        if (symbol.length < 2 || symbol.length > 20) {
+          return textResult('Invalid symbol.');
+        }
         try {
           const price = await client.getPrice(symbol);
           return textResult(`${symbol}: $${price}`);
-        } catch (err: any) {
-          return textResult(`Failed to get price for ${symbol}: ${err.message}`);
+        } catch (err) {
+          return textResult(`Failed to get price for ${symbol}: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     });
@@ -294,7 +297,11 @@ const plugin: OpenClawPluginDefinition = {
         if (!validKeys.includes(params.key)) {
           return textResult(`Invalid key "${params.key}". Valid keys: ${validKeys.join(', ')}`);
         }
-        const text = updateSettingSkill(params.key as any, params.value);
+        const validationError = validateSetting(params.key as keyof import('../api/types.js').Settings, params.value);
+        if (validationError) {
+          return textResult(`⚠️ ${validationError}`);
+        }
+        const text = updateSettingSkill(params.key as keyof import('../api/types.js').Settings, params.value);
         return textResult(text);
       },
     });
@@ -382,8 +389,8 @@ const plugin: OpenClawPluginDefinition = {
           }
 
           return textResult(`🦞 Converted ${free} ${asset} → ${received.toFixed(4)} ${target}`);
-        } catch (err: any) {
-          return textResult(`Failed to convert ${asset}: ${err.message}`);
+        } catch (err) {
+          return textResult(`Failed to convert ${asset}: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     });
@@ -399,6 +406,9 @@ const plugin: OpenClawPluginDefinition = {
         to: Type.String({ description: 'Destination: spot, funding, futures, earn' }),
       }),
       async execute(_toolCallId: string, params: { asset: string; amount: number; from: string; to: string }) {
+        if (!isFinite(params.amount) || params.amount <= 0) {
+          return textResult('Amount must be a positive number.');
+        }
         const asset = params.asset.toUpperCase();
         const from = params.from.toLowerCase();
         const to = params.to.toLowerCase();
@@ -447,7 +457,9 @@ const plugin: OpenClawPluginDefinition = {
         sweep: Type.Optional(Type.Boolean({ description: 'Move purchased BNB to Simple Earn (default true)' })),
       }),
       async execute(_toolCallId: string, params: { amount_usdt: number; sweep?: boolean }) {
-        if (params.amount_usdt <= 0) return textResult('Amount must be positive.');
+        if (!isFinite(params.amount_usdt) || params.amount_usdt <= 0 || params.amount_usdt > 100_000) {
+          return textResult('Amount must be a positive number (max 100,000 USDT).');
+        }
         try {
           const order = await client.placeSpotQuoteOrder('BUY', params.amount_usdt, 'BNBUSDT');
           const bnbBought = parseFloat(order.executedQty);
@@ -463,8 +475,8 @@ const plugin: OpenClawPluginDefinition = {
             }
           }
           return textResult(msg);
-        } catch (err: any) {
-          return textResult(`Failed to buy BNB: ${err.message}`);
+        } catch (err) {
+          return textResult(`Failed to buy BNB: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     });
@@ -488,6 +500,9 @@ const plugin: OpenClawPluginDefinition = {
           return textResult('🔴 Trading paused — USDT below floor. Increase balance or lower usdt_floor setting.');
         }
 
+        if (params.size_bnb != null && (!isFinite(params.size_bnb) || params.size_bnb <= 0 || params.size_bnb > 1000)) {
+          return textResult('Size must be between 0.01 and 1000 BNB.');
+        }
         const size = params.size_bnb ?? await riskManager.calculateSize();
         if (size <= 0) {
           return textResult('Calculated position size is 0. Check USDT balance and risk settings.');
@@ -496,8 +511,8 @@ const plugin: OpenClawPluginDefinition = {
         try {
           const tradeId = await tradeEngine.openTrade(dir as 'LONG' | 'SHORT', size);
           return textResult(`🦞 Opened ${dir} ${size.toFixed(2)} BNB (trade #${tradeId})`);
-        } catch (err: any) {
-          return textResult(`Failed to open position: ${err.message}`);
+        } catch (err) {
+          return textResult(`Failed to open position: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     });
@@ -517,8 +532,8 @@ const plugin: OpenClawPluginDefinition = {
           }
           await tradeEngine.closeAllTrades();
           return textResult('🦞 All positions closed.');
-        } catch (err: any) {
-          return textResult(`Failed to close position: ${err.message}`);
+        } catch (err) {
+          return textResult(`Failed to close position: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     });
@@ -559,8 +574,8 @@ const plugin: OpenClawPluginDefinition = {
           }
 
           return textResult(msg);
-        } catch (err: any) {
-          return textResult(`Failed to fetch positions: ${err.message}`);
+        } catch (err) {
+          return textResult(`Failed to fetch positions: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     });
@@ -662,8 +677,9 @@ const plugin: OpenClawPluginDefinition = {
     // Inject BNBClaw identity into every LLM call
     const BNBCLAW_PROMPT = [
       'You are BNBClaw 🦞, a BNB accumulation AI agent.',
+      'PERSONALITY: warm, sharp, a little playful — like a friend who\'s really good with money.',
       'CRITICAL: NEVER output a startup script, boot animation, checkmarks, or list all tools as bullet points.',
-      'On /start: write 2-3 sentences introducing yourself and what you can help with. Do NOT list every tool.',
+      'On /start or first message: introduce yourself with personality. Be curious about the user — ask what they\'d like you to focus on, what they\'re working toward. Keep it short (2-3 sentences). Do NOT list features.',
       'On follow-up messages: be concise but helpful. Show key data, skip fluff.',
       'RULES: Never sell BNB. Always use bnbclaw_* tools for data — never guess.',
       'You have tools for: status, earn, rewards, trades, hedge (on/off/status), settings, apy, price, scan, convert, transfer, sweep, buy_bnb, open_position, close_position, positions.',

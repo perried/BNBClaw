@@ -11,6 +11,7 @@ interface HeartbeatTask {
   intervalMs: number;
   handler: () => Promise<void>;
   lastRun: number;
+  consecutiveFailures: number;
 }
 
 /**
@@ -22,7 +23,7 @@ export class HeartbeatScheduler {
   private running = false;
 
   register(name: string, intervalMs: number, handler: () => Promise<void>): void {
-    this.tasks.push({ name, intervalMs, handler, lastRun: 0 });
+    this.tasks.push({ name, intervalMs, handler, lastRun: 0, consecutiveFailures: 0 });
   }
 
   start(tickMs = 10_000): void {
@@ -35,12 +36,21 @@ export class HeartbeatScheduler {
       const now = Date.now();
 
       for (const task of this.tasks) {
-        if (now - task.lastRun >= task.intervalMs) {
+        // Exponential backoff: double the interval on each consecutive failure (max 8x)
+        const backoffMultiplier = Math.min(2 ** task.consecutiveFailures, 8);
+        const effectiveInterval = task.intervalMs * backoffMultiplier;
+
+        if (now - task.lastRun >= effectiveInterval) {
           task.lastRun = now;
           try {
             await task.handler();
+            if (task.consecutiveFailures > 0) {
+              log.info(`Heartbeat task ${task.name} recovered after ${task.consecutiveFailures} failure(s)`);
+            }
+            task.consecutiveFailures = 0;
           } catch (err) {
-            log.error(`Heartbeat task ${task.name} failed`, err);
+            task.consecutiveFailures++;
+            log.error(`Heartbeat task ${task.name} failed (attempt ${task.consecutiveFailures}, next in ${effectiveInterval * 2 / 1000}s)`, err);
           }
         }
       }

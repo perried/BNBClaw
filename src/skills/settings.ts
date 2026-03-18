@@ -1,4 +1,4 @@
-import { getSettings, updateSetting } from '../config/settings.js';
+import { getSettings, updateSetting, validateSetting } from '../config/settings.js';
 import { formatUsdt } from '../utils/formatter.js';
 import type { Settings } from '../api/types.js';
 
@@ -32,6 +32,11 @@ export function updateSettingSkill(key: keyof Settings, value: number | boolean)
 
   if (!validKeys.includes(key)) {
     return `⚠️ Unknown setting: ${key}\nValid: ${validKeys.join(', ')}`;
+  }
+
+  const validationError = validateSetting(key, value);
+  if (validationError) {
+    return `⚠️ ${validationError}`;
   }
 
   updateSetting(key, value);

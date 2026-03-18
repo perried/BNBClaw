@@ -92,41 +92,6 @@ export interface OrderResult {
   avgPrice: string;
 }
 
-// WebSocket event types
-
-export interface WsBalanceUpdate {
-  e: 'balanceUpdate';
-  E: number;
-  a: string;  // asset
-  d: string;  // balance delta
-  T: number;
-}
-
-export interface WsAccountUpdate {
-  e: 'outboundAccountPosition';
-  E: number;
-  u: number;
-  B: Array<{ a: string; f: string; l: string }>;
-}
-
-export interface WsOrderUpdate {
-  e: 'ORDER_TRADE_UPDATE';
-  E: number;
-  o: {
-    s: string;   // symbol
-    S: string;   // side
-    o: string;   // order type
-    X: string;   // order status
-    q: string;   // quantity
-    p: string;   // price
-    ap: string;  // avg price
-    rp: string;  // realized profit
-    i: number;   // orderId
-  };
-}
-
-export type WsUserEvent = WsBalanceUpdate | WsAccountUpdate | WsOrderUpdate;
-
 // TradingView webhook payload
 
 export interface WebhookSignal {
