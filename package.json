@@ -1,43 +1,43 @@
 {
   "name": "bnbclaw",
-  "version": "0.2.0",
-  "description": "AI agent that maximizes BNB utility on Binance — auto-earn, trading, hedging, reward accumulation. Chat-based setup via Telegram.",
-  "main": "dist/index.js",
+  "version": "1.0.0",
+  "description": "BNB-first OpenClaw assistant for Binance Earn, reward handling, wallet cleanup, and hedge guidance without selling spot BNB.",
+  "main": "dist/plugin.js",
+  "files": [
+    "dist/",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsc --watch",
-    "test": "vitest"
+    "test": "vitest run --pool threads",
+    "prepack": "npm run build && npm test"
   },
   "keywords": [
     "binance",
     "bnb",
     "openclaw",
-    "trading",
+    "openclaw-plugin",
     "ai-agent"
   ],
   "author": "",
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {
-    "@mariozechner/pi-agent-core": "^0.57.1",
     "@sinclair/typebox": "^0.34.48",
-    "better-sqlite3": "^12.6.2",
-    "dotenv": "^17.3.1",
-    "express": "^5.2.1",
-    "typescript": "^5.9.3"
+    "better-sqlite3": "^12.6.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
-    "@types/express": "^5.0.6",
     "@types/node": "^25.3.5",
+    "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   },
   "openclaw": {
-    "plugin": "dist/api/plugin.js",
     "manifest": "openclaw.plugin.json",
     "extensions": [
-      "./dist/api/plugin.js"
+      "./dist/plugin.js"
     ]
   }
 }

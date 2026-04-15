@@ -1,91 +1,16 @@
 import { getDb } from './database.js';
 import type {
-  TradeRecord,
   RewardRecord,
   ScheduledJob,
-  TradeDirection,
-  TradeStatus,
   JobStatus,
+  HedgeSkillRecord,
 } from '../api/types.js';
 
-// ── Trades ───────────────────────────────────────────────
-
-export function insertTrade(trade: Omit<TradeRecord, 'id'>): number {
-  const db = getDb();
-  const stmt = db.prepare(`
-    INSERT INTO trades (timestamp, direction, entry_price, exit_price, size_bnb, pnl_usdt, pnl_action, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const result = stmt.run(
-    trade.timestamp,
-    trade.direction,
-    trade.entry_price,
-    trade.exit_price,
-    trade.size_bnb,
-    trade.pnl_usdt,
-    trade.pnl_action,
-    trade.status
-  );
-  return result.lastInsertRowid as number;
-}
-
-export function closeTrade(
-  id: number,
-  exitPrice: number,
-  pnl: number,
-  action: string
-): void {
-  const db = getDb();
-  db.prepare(`
-    UPDATE trades SET exit_price = ?, pnl_usdt = ?, pnl_action = ?, status = 'CLOSED'
-    WHERE id = ?
-  `).run(exitPrice, pnl, action, id);
-}
-
-export function getOpenTrades(): TradeRecord[] {
-  const db = getDb();
-  return db.prepare(`SELECT * FROM trades WHERE status = 'OPEN'`).all() as TradeRecord[];
-}
-
-export function getTradeHistory(limit = 20): TradeRecord[] {
-  const db = getDb();
-  return db
-    .prepare(`SELECT * FROM trades ORDER BY id DESC LIMIT ?`)
-    .all(limit) as TradeRecord[];
-}
-
-export function getTradeStats(days = 30): {
-  totalPnl: number;
-  winCount: number;
-  lossCount: number;
-  bnbBought: number;
-} {
-  const db = getDb();
-  const since = new Date(Date.now() - days * 86400000).toISOString();
-  const row = db
-    .prepare(
-      `SELECT
-        COALESCE(SUM(pnl_usdt), 0) as totalPnl,
-        COALESCE(SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END), 0) as winCount,
-        COALESCE(SUM(CASE WHEN pnl_usdt < 0 THEN 1 ELSE 0 END), 0) as lossCount
-      FROM trades WHERE status = 'CLOSED' AND timestamp >= ?`
-    )
-    .get(since) as { totalPnl: number; winCount: number; lossCount: number };
-
-  // BNB bought from short profits
-  const bnbRow = db
-    .prepare(
-      `SELECT COALESCE(SUM(size_bnb), 0) as bnbBought
-       FROM trades WHERE pnl_action = 'BUY_BNB' AND timestamp >= ?`
-    )
-    .get(since) as { bnbBought: number };
-
-  return {
-    totalPnl: row.totalPnl,
-    winCount: row.winCount,
-    lossCount: row.lossCount,
-    bnbBought: bnbRow.bnbBought,
-  };
+export interface StoredCredentials {
+  provider: string;
+  api_key: string;
+  api_secret: string;
+  updated_at: string;
 }
 
 // ── Rewards ──────────────────────────────────────────────
@@ -114,6 +39,23 @@ export function isRewardProcessed(tranId: number): boolean {
     .prepare(`SELECT 1 FROM rewards WHERE tran_id = ?`)
     .get(tranId);
   return !!row;
+}
+
+export function getRewardByTranId(tranId: number): RewardRecord | null {
+  const db = getDb();
+  return (
+    (db.prepare(`SELECT * FROM rewards WHERE tran_id = ?`).get(tranId) as RewardRecord | undefined) ??
+    null
+  );
+}
+
+export function updateRewardConversion(tranId: number, convertedTo: string, convertedAmount: number): void {
+  const db = getDb();
+  db.prepare(
+    `UPDATE rewards
+     SET converted_to = ?, converted_amount = ?
+     WHERE tran_id = ?`,
+  ).run(convertedTo, convertedAmount, tranId);
 }
 
 export function getRewardHistory(limit = 20): RewardRecord[] {
@@ -154,68 +96,6 @@ export function getRewardStats(days = 30): {
     count: total.count,
     bySource,
   };
-}
-
-// ── Accumulator (short profit buffer) ────────────────────
-
-export function getShortProfitBuffer(): number {
-  const db = getDb();
-  const row = db
-    .prepare(`SELECT short_profit_buffer FROM accumulator WHERE id = 1`)
-    .get() as { short_profit_buffer: number } | undefined;
-  return row?.short_profit_buffer ?? 0;
-}
-
-export function addToShortProfitBuffer(amount: number): number {
-  const db = getDb();
-  db.prepare(
-    `UPDATE accumulator SET short_profit_buffer = short_profit_buffer + ? WHERE id = 1`
-  ).run(amount);
-  return getShortProfitBuffer();
-}
-
-export function resetShortProfitBuffer(): void {
-  const db = getDb();
-  db.prepare(`UPDATE accumulator SET short_profit_buffer = 0 WHERE id = 1`).run();
-}
-
-// ── Snapshots ────────────────────────────────────────────
-
-export function insertBnbSnapshot(earn: number, spot: number): void {
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO bnb_snapshots (timestamp, earn_balance, spot_balance, total)
-     VALUES (?, ?, ?, ?)`
-  ).run(new Date().toISOString(), earn, spot, earn + spot);
-}
-
-export function insertUsdtSnapshot(futures: number, spot: number): void {
-  const db = getDb();
-  db.prepare(
-    `INSERT INTO usdt_snapshots (timestamp, futures_balance, spot_balance, total)
-     VALUES (?, ?, ?, ?)`
-  ).run(new Date().toISOString(), futures, spot, futures + spot);
-}
-
-export function getLatestBnbSnapshot(): { earn_balance: number; spot_balance: number; total: number } | null {
-  const db = getDb();
-  return db
-    .prepare(`SELECT earn_balance, spot_balance, total FROM bnb_snapshots ORDER BY id DESC LIMIT 1`)
-    .get() as { earn_balance: number; spot_balance: number; total: number } | undefined ?? null;
-}
-
-export function getBnbGrowth(days = 7): number {
-  const db = getDb();
-  const since = new Date(Date.now() - days * 86400000).toISOString();
-  const oldest = db
-    .prepare(`SELECT total FROM bnb_snapshots WHERE timestamp >= ? ORDER BY id ASC LIMIT 1`)
-    .get(since) as { total: number } | undefined;
-  const newest = db
-    .prepare(`SELECT total FROM bnb_snapshots ORDER BY id DESC LIMIT 1`)
-    .get() as { total: number } | undefined;
-
-  if (!oldest || !newest) return 0;
-  return newest.total - oldest.total;
 }
 
 // ── Scheduled Jobs ───────────────────────────────────────
@@ -266,28 +146,160 @@ export function deleteJobsByEvent(eventName: string): number {
   return result.changes;
 }
 
-// ── Settings ─────────────────────────────────────────────
+// ── Pending Alerts (notification queue) ─────────────────
 
-export function getSetting(key: string): string | null {
-  const db = getDb();
-  const row = db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as { value: string } | undefined;
-  return row?.value ?? null;
+export type AlertSeverity = 'info' | 'warn' | 'danger';
+
+export interface PendingAlert {
+  id: number;
+  created_at: string;
+  severity: AlertSeverity;
+  message: string;
 }
 
-export function setSetting(key: string, value: string): void {
+export function insertAlert(severity: AlertSeverity, message: string): number {
   const db = getDb();
-  db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`).run(key, value);
+  const result = db
+    .prepare(`INSERT INTO pending_alerts (created_at, severity, message) VALUES (?, ?, ?)`)
+    .run(new Date().toISOString(), severity, message);
+  return result.lastInsertRowid as number;
 }
 
-export function getAllSettings(): Record<string, string> {
+export function getUndeliveredAlerts(limit = 20): PendingAlert[] {
   const db = getDb();
-  const rows = db.prepare(`SELECT key, value FROM settings`).all() as Array<{
-    key: string;
-    value: string;
-  }>;
-  const settings: Record<string, string> = {};
-  for (const row of rows) settings[row.key] = row.value;
-  return settings;
+  return db
+    .prepare(
+      `SELECT id, created_at, severity, message
+       FROM pending_alerts
+       WHERE delivered_at IS NULL
+       ORDER BY id ASC
+       LIMIT ?`,
+    )
+    .all(limit) as PendingAlert[];
 }
 
+export function markAlertsDelivered(ids: number[]): void {
+  if (ids.length === 0) return;
+  const db = getDb();
+  const placeholders = ids.map(() => '?').join(',');
+  db.prepare(
+    `UPDATE pending_alerts SET delivered_at = ? WHERE id IN (${placeholders})`,
+  ).run(new Date().toISOString(), ...ids);
+}
 
+// ── Stored Credentials ─────────────────────────────────
+
+export function upsertCredentials(provider: string, apiKey: string, apiSecret: string): void {
+  const db = getDb();
+  db.prepare(
+    `INSERT INTO credentials (provider, api_key, api_secret, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(provider) DO UPDATE SET
+       api_key = excluded.api_key,
+       api_secret = excluded.api_secret,
+       updated_at = excluded.updated_at`,
+  ).run(provider, apiKey, apiSecret, new Date().toISOString());
+}
+
+export function getStoredCredentials(provider: string): StoredCredentials | null {
+  const db = getDb();
+  return (
+    (db.prepare(`SELECT provider, api_key, api_secret, updated_at FROM credentials WHERE provider = ?`).get(
+      provider,
+    ) as StoredCredentials | undefined) ?? null
+  );
+}
+
+export function clearStoredCredentials(provider: string): void {
+  const db = getDb();
+  db.prepare(`DELETE FROM credentials WHERE provider = ?`).run(provider);
+}
+
+// ── Hedge Skills ───────────────────────────────────────
+
+function mapHedgeSkillRow(row: Omit<HedgeSkillRecord, 'is_active'> & { is_active: number }): HedgeSkillRecord {
+  return {
+    ...row,
+    is_active: row.is_active === 1,
+  };
+}
+
+export function upsertHedgeSkill(skill: {
+  skill_id: string;
+  name: string;
+  description: string;
+  instructions: string;
+}): void {
+  const db = getDb();
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO hedge_skills (skill_id, name, description, instructions, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(skill_id) DO UPDATE SET
+       name = excluded.name,
+       description = excluded.description,
+       instructions = excluded.instructions,
+       updated_at = excluded.updated_at`,
+  ).run(skill.skill_id, skill.name, skill.description, skill.instructions, now, now);
+}
+
+export function getHedgeSkills(): HedgeSkillRecord[] {
+  const db = getDb();
+  const rows = db
+    .prepare(
+      `SELECT id, skill_id, name, description, instructions, is_active, created_at, updated_at
+       FROM hedge_skills
+       ORDER BY is_active DESC, updated_at DESC`,
+    )
+    .all() as Array<Omit<HedgeSkillRecord, 'is_active'> & { is_active: number }>;
+  return rows.map(mapHedgeSkillRow);
+}
+
+export function getHedgeSkill(skillId: string): HedgeSkillRecord | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT id, skill_id, name, description, instructions, is_active, created_at, updated_at
+       FROM hedge_skills
+       WHERE skill_id = ?`,
+    )
+    .get(skillId) as (Omit<HedgeSkillRecord, 'is_active'> & { is_active: number }) | undefined;
+  return row ? mapHedgeSkillRow(row) : null;
+}
+
+export function getActiveHedgeSkill(): HedgeSkillRecord | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT id, skill_id, name, description, instructions, is_active, created_at, updated_at
+       FROM hedge_skills
+       WHERE is_active = 1
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+    )
+    .get() as (Omit<HedgeSkillRecord, 'is_active'> & { is_active: number }) | undefined;
+  return row ? mapHedgeSkillRow(row) : null;
+}
+
+export function activateHedgeSkill(skillId: string): boolean {
+  const db = getDb();
+  const activate = db.transaction((id: string) => {
+    const exists = db.prepare(`SELECT 1 FROM hedge_skills WHERE skill_id = ?`).get(id);
+    if (!exists) return false;
+
+    db.prepare(`UPDATE hedge_skills SET is_active = 0 WHERE is_active = 1`).run();
+    db.prepare(`UPDATE hedge_skills SET is_active = 1, updated_at = ? WHERE skill_id = ?`).run(
+      new Date().toISOString(),
+      id,
+    );
+    return true;
+  });
+
+  return activate(skillId);
+}
+
+export function deleteHedgeSkill(skillId: string): boolean {
+  const db = getDb();
+  const result = db.prepare(`DELETE FROM hedge_skills WHERE skill_id = ?`).run(skillId);
+  return result.changes > 0;
+}

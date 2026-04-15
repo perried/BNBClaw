@@ -1,44 +1,23 @@
 {
   "name": "BNBClaw",
-  "description": "AI agent that maximizes BNB utility on Binance — auto-earn, trading, hedging, and reward accumulation.",
-  "version": "0.1.0",
-
+  "description": "BNB-first OpenClaw assistant for Binance Earn, reward handling, wallet cleanup, and hedge guidance without selling spot BNB.",
+  "version": "1.0.0",
   "plugins": [
     {
       "id": "bnbclaw",
-      "source": "./dist/api/plugin.js",
+      "source": "./dist/plugin.js",
       "manifest": "./openclaw.plugin.json",
-      "config": {
-        "binance_api_key": "${BINANCE_API_KEY}",
-        "binance_api_secret": "${BINANCE_API_SECRET}",
-        "webhook_secret": "${WEBHOOK_SECRET}",
-        "webhook_port": 3000,
-        "usdt_floor": 500,
-        "leverage": 3,
-        "risk_per_trade": 0.05,
-        "bnb_buy_threshold": 50,
-        "hedge_ratio": 0.85
-      }
+      "config": {}
     }
   ],
-
-  "env": {
-    "BINANCE_API_KEY": "Binance API key (trade permission, no withdraw)",
-    "BINANCE_API_SECRET": "Binance API secret",
-    "WEBHOOK_SECRET": "(optional) TradingView webhook secret"
-  },
-
   "heartbeat": {
     "enabled": true,
     "checks": [
       { "name": "scheduled-jobs", "interval": "30s" },
       { "name": "reward-check", "interval": "30m" },
-      { "name": "hedge-rebalance", "interval": "1h" },
-      { "name": "funding-monitor", "interval": "4h" },
-      { "name": "risk-check", "interval": "5m" }
+      { "name": "dust-cleanup", "interval": "7d" }
     ]
   },
-
   "permissions": {
     "network": true,
     "filesystem": false,

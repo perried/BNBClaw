@@ -1,53 +1,49 @@
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventScheduler } from '../src/core/event-scheduler.js';
 
-// Mock DB — we test the scheduler logic, not the DB layer
-import * as queries from '../src/db/queries.js';
-import { vi } from 'vitest';
+const mockState = vi.hoisted(() => ({
+  jobs: [] as any[],
+  nextId: 1,
+}));
 
-vi.mock('../src/db/queries.js', () => {
-  const jobs: any[] = [];
-  let nextId = 1;
-
-  return {
-    insertScheduledJob: vi.fn((job: any) => {
-      const id = nextId++;
-      jobs.push({ ...job, id, executed_at: null });
-      return id;
-    }),
-    getPendingJobs: vi.fn(() => {
-      const now = new Date().toISOString();
-      return jobs.filter((j) => j.status === 'PENDING' && j.execute_at <= now);
-    }),
-    getUpcomingJobs: vi.fn(() => {
-      return jobs.filter((j) => j.status === 'PENDING');
-    }),
-    updateJobStatus: vi.fn((id: number, status: string) => {
-      const job = jobs.find((j) => j.id === id);
-      if (job) job.status = status;
-    }),
-    deleteJobsByEvent: vi.fn((eventName: string) => {
-      const before = jobs.length;
-      const toRemove = jobs.filter((j) => j.event_name === eventName && j.status === 'PENDING');
-      for (const j of toRemove) {
-        const idx = jobs.indexOf(j);
-        if (idx >= 0) jobs.splice(idx, 1);
-      }
-      return before - jobs.length;
-    }),
-  };
-});
+vi.mock('../src/db/queries.js', () => ({
+  insertScheduledJob: vi.fn((job: any) => {
+    const id = mockState.nextId++;
+    mockState.jobs.push({ ...job, id, executed_at: null });
+    return id;
+  }),
+  getPendingJobs: vi.fn(() => {
+    const now = new Date().toISOString();
+    return mockState.jobs.filter((job) => job.status === 'PENDING' && job.execute_at <= now);
+  }),
+  getUpcomingJobs: vi.fn(() => {
+    return mockState.jobs.filter((job) => job.status === 'PENDING');
+  }),
+  updateJobStatus: vi.fn((id: number, status: string) => {
+    const job = mockState.jobs.find((item) => item.id === id);
+    if (job) job.status = status;
+  }),
+  deleteJobsByEvent: vi.fn((eventName: string) => {
+    const before = mockState.jobs.length;
+    mockState.jobs = mockState.jobs.filter((job) => !(job.event_name === eventName && job.status === 'PENDING'));
+    return before - mockState.jobs.length;
+  }),
+}));
 
 describe('EventScheduler', () => {
-  it('schedules a job', () => {
-    const notifications: string[] = [];
-    const scheduler = new EventScheduler((msg) => notifications.push(msg));
+  beforeEach(() => {
+    mockState.jobs = [];
+    mockState.nextId = 1;
+    vi.clearAllMocks();
+  });
 
+  it('schedules a job', () => {
+    const scheduler = new EventScheduler(() => {});
     const date = new Date('2026-03-15T10:00:00Z');
+
     const id = scheduler.schedule('TOKEN_Y Megadrop', 'REMIND', date, { url: 'megadrop.binance.com' });
 
     expect(id).toBeGreaterThan(0);
-    expect(queries.insertScheduledJob).toHaveBeenCalled();
   });
 
   it('lists upcoming jobs', () => {
@@ -55,7 +51,9 @@ describe('EventScheduler', () => {
     scheduler.schedule('Test Event', 'ACTION', new Date('2030-01-01'));
 
     const jobs = scheduler.getSchedule();
-    expect(jobs.length).toBeGreaterThan(0);
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].event_name).toBe('Test Event');
   });
 
   it('cancels jobs by event name', () => {
@@ -63,24 +61,22 @@ describe('EventScheduler', () => {
     scheduler.schedule('Cancel Me', 'ACTION', new Date('2030-01-01'));
 
     const deleted = scheduler.cancel('Cancel Me');
-    expect(deleted).toBeGreaterThan(0);
+
+    expect(deleted).toBe(1);
+    expect(scheduler.getSchedule()).toHaveLength(0);
   });
 
-  it('executes due jobs with registered handler', async () => {
-    const notifications: string[] = [];
-    const scheduler = new EventScheduler((msg) => notifications.push(msg));
-
+  it('executes due jobs with a registered handler', async () => {
+    const scheduler = new EventScheduler(() => {});
     const executed: string[] = [];
+
     scheduler.registerHandler('TEST_ACTION', async (job) => {
       executed.push(job.event_name);
     });
-
-    // Schedule a job in the past so it's due
     scheduler.schedule('Past Event', 'TEST_ACTION', new Date('2020-01-01'));
 
     await scheduler.executeDueJobs();
-    // The mock getPendingJobs may return the job if execute_at <= now
-    // Job should have been processed
-    expect(queries.getPendingJobs).toHaveBeenCalled();
+
+    expect(executed).toEqual(['Past Event']);
   });
 });

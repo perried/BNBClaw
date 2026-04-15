@@ -1,64 +1,23 @@
 {
   "id": "bnbclaw",
   "name": "BNBClaw",
-  "description": "AI agent that maximizes BNB utility on Binance — auto-earn, trading, hedging, and reward accumulation. Never sells BNB, only accumulates. Set up everything via Telegram chat.",
-  "version": "0.2.0",
+  "description": "BNB-first OpenClaw assistant for Binance Earn, reward handling, wallet cleanup, and hedge guidance without selling spot BNB.",
+  "version": "1.0.0",
   "homepage": "https://github.com/perried/BNBClaw",
+  "entry": "./dist/plugin.js",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
       "binance_api_key": {
         "type": "string",
-        "description": "Binance API key (enable spot + futures trade; disable withdraw). Can also be set via /setup in Telegram."
+        "sensitive": true,
+        "description": "Optional legacy Binance API key. Prefer sending credentials in chat."
       },
       "binance_api_secret": {
         "type": "string",
-        "description": "Binance API secret. Can also be set via /setup in Telegram."
-      },
-      "webhook_secret": {
-        "type": "string",
-        "description": "TradingView webhook secret token (optional)"
-      },
-      "webhook_port": {
-        "type": "number",
-        "description": "Webhook server port",
-        "default": 3000
-      },
-      "usdt_floor": {
-        "type": "number",
-        "description": "Minimum USDT balance — agent stops trading below this (0–100,000)",
-        "default": 500,
-        "minimum": 0,
-        "maximum": 100000
-      },
-      "leverage": {
-        "type": "number",
-        "description": "Futures leverage multiplier (1–20)",
-        "default": 3,
-        "minimum": 1,
-        "maximum": 20
-      },
-      "risk_per_trade": {
-        "type": "number",
-        "description": "Fraction of available USDT per trade (0.01–0.20)",
-        "default": 0.05,
-        "minimum": 0.01,
-        "maximum": 0.20
-      },
-      "bnb_buy_threshold": {
-        "type": "number",
-        "description": "Accumulated short profits (USDT) before auto-buying BNB (5–10,000)",
-        "default": 50,
-        "minimum": 5,
-        "maximum": 10000
-      },
-      "hedge_ratio": {
-        "type": "number",
-        "description": "Target hedge ratio (0.0–1.0)",
-        "default": 0.85,
-        "minimum": 0,
-        "maximum": 1
+        "sensitive": true,
+        "description": "Optional legacy Binance API secret. Prefer sending credentials in chat."
       }
     }
   }

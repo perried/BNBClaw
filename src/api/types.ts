@@ -6,23 +6,13 @@ export interface SpotBalance {
   locked: string;
 }
 
-export interface FuturesBalance {
+export interface FundingBalance {
   asset: string;
-  balance: string;
-  availableBalance: string;
-  crossUnPnl: string;
-}
-
-export interface FuturesPosition {
-  symbol: string;
-  positionAmt: string;
-  entryPrice: string;
-  markPrice: string;
-  unRealizedProfit: string;
-  liquidationPrice: string;
-  leverage: string;
-  marginType: string;
-  positionSide: string;
+  free: string;
+  locked: string;
+  freeze: string;
+  withdrawing?: string;
+  btcValuation?: string;
 }
 
 export interface EarnPosition {
@@ -33,13 +23,37 @@ export interface EarnPosition {
   collateralAmount: string;
   productId: string;
   productName: string;
+  latestAnnualPercentageRate?: string;
+  tierAnnualPercentageRate?: Record<string, string>;
+  autoSubscribe?: boolean;
+  canRedeem?: boolean;
 }
 
-export interface FundingRate {
-  symbol: string;
-  fundingRate: string;
-  fundingTime: number;
-  markPrice: string;
+export interface LockedPosition {
+  positionId: number | string;
+  parentPositionId?: number | string;
+  projectId: string;
+  asset: string;
+  amount: string;
+  duration: string;
+  rewardAsset?: string;
+  APY: string;
+  extraRewardAsset?: string;
+  extraRewardAPR?: string;
+  boostRewardAsset?: string;
+  boostApr?: string;
+  rewardAmt?: string;
+  status: string;
+  redeemTo?: string;
+}
+
+export interface SimpleEarnAccount {
+  totalAmountInBTC: string;
+  totalAmountInUSDT: string;
+  totalFlexibleAmountInBTC: string;
+  totalFlexibleAmountInUSDT: string;
+  totalLockedInBTC: string;
+  totalLockedInUSDT: string;
 }
 
 export interface AssetDividend {
@@ -74,12 +88,42 @@ export interface FlexibleProduct {
 export interface LockedProduct {
   projectId: string;
   asset: string;
+  rewardAsset?: string;
   duration: number;
   annualPercentageRate: string;
+  extraRewardAPR?: string;
+  boostApr?: string;
   canPurchase: boolean;
   minPurchaseAmount: string;
   maxPurchaseAmountPerUser: string;
   status: string;
+  isSoldOut?: boolean;
+}
+
+export interface DustConvertibleAsset {
+  asset: string;
+  assetFullName: string;
+  amountFree: string;
+  exchange: string;
+  toQuotaAssetAmount: string;
+  toTargetAssetAmount: string;
+  toTargetAssetOffExchange: string;
+}
+
+export interface DustTransferResult {
+  tranId: number;
+  fromAsset: string;
+  amount: string;
+  transferedAmount: string;
+  serviceChargeAmount: string;
+  operateTime: number;
+}
+
+export interface DustConversionResult {
+  totalTransfered: string;
+  totalServiceCharge: string;
+  transferResult: DustTransferResult[];
+  assets: string[];
 }
 
 export interface OrderResult {
@@ -90,37 +134,14 @@ export interface OrderResult {
   type: string;
   executedQty: string;
   avgPrice: string;
-}
-
-// TradingView webhook payload
-
-export interface WebhookSignal {
-  secret: string;
-  direction: 'LONG' | 'SHORT' | 'CLOSE';
-  symbol?: string;   // default BNBUSDT
-  message?: string;
+  cumQuote?: string;
+  cummulativeQuoteQty?: string;
 }
 
 // Internal types
 
-export type TradeDirection = 'LONG' | 'SHORT';
-export type TradeStatus = 'OPEN' | 'CLOSED';
-export type PnlAction = 'BUY_BNB' | 'KEEP_USDT';
-export type TradingMode = 'ACTIVE' | 'CONSERVATIVE' | 'PASSIVE';
 export type RewardSource = 'LAUNCHPOOL' | 'AIRDROP' | 'EARN_INTEREST' | 'DISTRIBUTION';
 export type JobStatus = 'PENDING' | 'EXECUTING' | 'DONE' | 'FAILED';
-
-export interface TradeRecord {
-  id?: number;
-  timestamp: string;
-  direction: TradeDirection;
-  entry_price: number;
-  exit_price: number | null;
-  size_bnb: number;
-  pnl_usdt: number | null;
-  pnl_action: PnlAction | null;
-  status: TradeStatus;
-}
 
 export interface RewardRecord {
   id?: number;
@@ -144,11 +165,13 @@ export interface ScheduledJob {
   executed_at: string | null;
 }
 
-export interface Settings {
-  usdt_floor: number;
-  leverage: number;
-  risk_per_trade: number;
-  bnb_buy_threshold: number;
-  hedge_ratio: number;
-  webhook_enabled: boolean;
+export interface HedgeSkillRecord {
+  id?: number;
+  skill_id: string;
+  name: string;
+  description: string;
+  instructions: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }

@@ -1,7 +1,5 @@
 import type { EarnManager } from '../core/earn-manager.js';
 import type { EventScheduler } from '../core/event-scheduler.js';
-import type { HedgeManager } from '../core/hedge-manager.js';
-import type { RiskManager } from '../core/risk-manager.js';
 import { createLogger } from '../utils/logger.js';
 
 const log = createLogger('heartbeat');
@@ -67,19 +65,14 @@ export class HeartbeatScheduler {
   }
 }
 
-/**
- * Register all heartbeat tasks per PLAN.md schedule.
- */
 export function registerHeartbeats(
   scheduler: HeartbeatScheduler,
   deps: {
     earnManager: EarnManager;
     eventScheduler: EventScheduler;
-    hedgeManager: HedgeManager;
-    riskManager: RiskManager;
   }
 ): void {
-  const { earnManager, eventScheduler, hedgeManager, riskManager } = deps;
+  const { earnManager, eventScheduler } = deps;
 
   // Scheduled jobs — every 30 sec
   scheduler.register('scheduled-jobs', 30_000, async () => {
@@ -91,22 +84,8 @@ export function registerHeartbeats(
     await earnManager.heartbeat();
   });
 
-  // Hedge rebalance — every 1 hour
-  scheduler.register('hedge-rebalance', 60 * 60_000, async () => {
-    if (hedgeManager.isActive()) {
-      await hedgeManager.rebalance();
-    }
-  });
-
-  // Risk/margin check — every 5 min
-  scheduler.register('risk-check', 5 * 60_000, async () => {
-    await riskManager.checkMarginHealth();
-    await riskManager.checkUsdtFloor();
-  });
-
   // Weekly dust cleanup — every 7 days
   scheduler.register('dust-cleanup', 7 * 24 * 60 * 60_000, async () => {
     await earnManager.cleanupDust();
   });
-
 }

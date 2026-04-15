@@ -1,60 +1,95 @@
 import crypto from 'crypto';
 import https from 'https';
-import http from 'http';
 import type {
   SpotBalance,
-  FuturesBalance,
-  FuturesPosition,
+  FundingBalance,
   EarnPosition,
-  FundingRate,
+  LockedPosition,
+  SimpleEarnAccount,
   AssetDividend,
   ConvertQuote,
   FlexibleProduct,
   LockedProduct,
+  DustConvertibleAsset,
+  DustConversionResult,
   OrderResult,
 } from './types.js';
+
+/**
+ * Binance market orders return avgPrice="0" sometimes - fall back to
+ * cumQuote / executedQty so downstream math does not divide by zero.
+ */
+export function fillPrice(order: OrderResult): number {
+  const avg = parseFloat(order.avgPrice);
+  if (avg > 0) return avg;
+  const cumQuote = parseFloat(order.cumQuote ?? order.cummulativeQuoteQty ?? '0');
+  const qty = parseFloat(order.executedQty);
+  return qty > 0 ? cumQuote / qty : 0;
+}
+
+export type EarnSourceAccount = 'SPOT' | 'FUND' | 'ALL';
+export type LockedRedeemTarget = 'SPOT' | 'FLEXIBLE';
+
+interface SubscribeFlexibleOptions {
+  autoSubscribe?: boolean;
+  sourceAccount?: EarnSourceAccount;
+}
+
+interface SubscribeLockedOptions extends SubscribeFlexibleOptions {
+  duration?: number;
+  redeemTo?: LockedRedeemTarget;
+}
 
 interface RequestOptions {
   method: 'GET' | 'POST' | 'DELETE';
   path: string;
-  params?: Record<string, string | number>;
+  params?: Record<string, string | number | boolean>;
   signed?: boolean;
+}
+
+interface LockedProductListRow {
+  projectId: string;
+  canPurchase?: boolean;
+  detail?: {
+    asset?: string;
+    rewardAsset?: string;
+    duration?: number | string;
+    apr?: string;
+    extraRewardAPR?: string;
+    boostApr?: string;
+    isSoldOut?: boolean;
+    status?: string;
+  };
+  quota?: {
+    minimum?: string;
+    maximum?: string;
+    perUserMax?: string;
+  };
 }
 
 export class BinanceClient {
   private readonly apiKey: string;
   private readonly apiSecret: string;
   private readonly baseUrl = 'api.binance.com';
-  private readonly futuresUrl = 'fapi.binance.com';
 
   constructor(apiKey: string, apiSecret: string) {
     this.apiKey = apiKey;
     this.apiSecret = apiSecret;
   }
 
-  // ── Signing ──────────────────────────────────────────────
-
   private sign(queryString: string): string {
-    return crypto
-      .createHmac('sha256', this.apiSecret)
-      .update(queryString)
-      .digest('hex');
+    return crypto.createHmac('sha256', this.apiSecret).update(queryString).digest('hex');
   }
 
-  private buildQuery(params: Record<string, string | number>): string {
+  private buildQuery(params: Record<string, string | number | boolean>): string {
     return Object.entries(params)
-      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
       .join('&');
   }
 
-  // ── HTTP ─────────────────────────────────────────────────
-
-  private request<T>(
-    host: string,
-    opts: RequestOptions
-  ): Promise<T> {
+  private request<T>(host: string, opts: RequestOptions): Promise<T> {
     return new Promise((resolve, reject) => {
-      const params: Record<string, string | number> = {
+      const params: Record<string, string | number | boolean> = {
         ...(opts.params ?? {}),
       };
 
@@ -83,7 +118,9 @@ export class BinanceClient {
 
       const req = https.request(reqOptions, (res) => {
         let data = '';
-        res.on('data', (chunk: Buffer) => (data += chunk.toString()));
+        res.on('data', (chunk: Buffer) => {
+          data += chunk.toString();
+        });
         res.on('end', () => {
           try {
             const parsed = JSON.parse(data);
@@ -112,113 +149,109 @@ export class BinanceClient {
     return this.request<T>(this.baseUrl, opts);
   }
 
-  private futures<T>(opts: RequestOptions): Promise<T> {
-    return this.request<T>(this.futuresUrl, opts);
-  }
-
-  // ── Spot Account ─────────────────────────────────────────
-
   async getSpotBalance(asset: string): Promise<{ free: number; locked: number }> {
     const data = await this.spot<{ balances: SpotBalance[] }>({
       method: 'GET',
       path: '/api/v3/account',
       signed: true,
     });
-    const bal = data.balances.find((b) => b.asset === asset);
+    const balance = data.balances.find((item) => item.asset === asset);
     return {
-      free: bal ? parseFloat(bal.free) : 0,
-      locked: bal ? parseFloat(bal.locked) : 0,
+      free: balance ? parseFloat(balance.free) : 0,
+      locked: balance ? parseFloat(balance.locked) : 0,
     };
   }
 
-  // ── Futures Account ──────────────────────────────────────
-
-  async getFuturesBalance(): Promise<{ balance: number; available: number }> {
-    const data = await this.futures<FuturesBalance[]>({
+  async getAllSpotBalances(): Promise<Array<{ asset: string; free: number; locked: number }>> {
+    const data = await this.spot<{ balances: SpotBalance[] }>({
       method: 'GET',
-      path: '/fapi/v2/balance',
+      path: '/api/v3/account',
       signed: true,
     });
-    const usdt = data.find((b) => b.asset === 'USDT');
-    return {
-      balance: usdt ? parseFloat(usdt.balance) : 0,
-      available: usdt ? parseFloat(usdt.availableBalance) : 0,
-    };
+    return data.balances
+      .map((balance) => ({
+        asset: balance.asset,
+        free: parseFloat(balance.free),
+        locked: parseFloat(balance.locked),
+      }))
+      .filter((balance) => balance.free > 0 || balance.locked > 0);
   }
 
-  async getFuturesPositions(): Promise<FuturesPosition[]> {
-    const data = await this.futures<FuturesPosition[]>({
+  async getSimpleEarnAccount(): Promise<SimpleEarnAccount> {
+    return this.spot<SimpleEarnAccount>({
       method: 'GET',
-      path: '/fapi/v2/positionRisk',
+      path: '/sapi/v1/simple-earn/account',
       signed: true,
     });
-    return data.filter((p) => parseFloat(p.positionAmt) !== 0);
   }
 
-  async getFuturesMarginRatio(): Promise<number> {
-    const data = await this.futures<{
-      totalMaintMargin: string;
-      totalMarginBalance: string;
-    }>({
-      method: 'GET',
-      path: '/fapi/v2/account',
-      signed: true,
-    });
-    const maint = parseFloat(data.totalMaintMargin);
-    const balance = parseFloat(data.totalMarginBalance);
-    if (balance === 0) return 100;
-    return (maint / balance) * 100;
-  }
+  async getEarnPositions(asset?: string): Promise<EarnPosition[]> {
+    const params: Record<string, string | number> = { size: 100 };
+    if (asset) params.asset = asset;
 
-  // ── Simple Earn ──────────────────────────────────────────
-
-  async getEarnPositions(): Promise<EarnPosition[]> {
     const data = await this.spot<{ rows: EarnPosition[]; total: number }>({
       method: 'GET',
       path: '/sapi/v1/simple-earn/flexible/position',
-      params: { asset: 'BNB', size: 100 },
+      params,
       signed: true,
     });
     return data.rows ?? [];
   }
 
-  async subscribeEarn(asset: string, amount: number): Promise<{ purchaseId: number; success: boolean }> {
-    // First get the productId for the asset
-    const products = await this.spot<{ rows: Array<{ productId: string; asset: string }> }>({
+  async getLockedPositions(asset?: string): Promise<LockedPosition[]> {
+    const params: Record<string, string | number> = { size: 100 };
+    if (asset) params.asset = asset;
+
+    const data = await this.spot<{ rows: LockedPosition[]; total: number }>({
       method: 'GET',
-      path: '/sapi/v1/simple-earn/flexible/list',
-      params: { asset },
+      path: '/sapi/v1/simple-earn/locked/position',
+      params,
       signed: true,
     });
-    const product = products.rows?.[0];
-    if (!product) throw new Error(`No Simple Earn product found for ${asset}`);
+    return data.rows ?? [];
+  }
+
+  async subscribeEarn(
+    asset: string,
+    amount: number,
+    options: SubscribeFlexibleOptions = {},
+  ): Promise<{ purchaseId: number; success: boolean }> {
+    const products = await this.getFlexibleProducts(asset);
+    const product = products.find((item) => item.asset === asset && item.canPurchase) ?? products[0];
+    if (!product) throw new Error(`No Simple Earn flexible product found for ${asset}`);
+
+    const params: Record<string, string | number | boolean> = {
+      productId: product.productId,
+      amount,
+      autoSubscribe: options.autoSubscribe ?? true,
+    };
+    if (options.sourceAccount) params.sourceAccount = options.sourceAccount;
 
     return this.spot({
       method: 'POST',
       path: '/sapi/v1/simple-earn/flexible/subscribe',
-      params: { productId: product.productId, amount },
+      params,
       signed: true,
     });
   }
 
   async redeemEarn(asset: string, amount: number): Promise<{ redeemId: number; success: boolean }> {
-    const positions = await this.getEarnPositions();
-    const pos = positions.find((p) => p.asset === asset);
-    if (!pos) throw new Error(`No Simple Earn position for ${asset}`);
+    const positions = await this.getEarnPositions(asset);
+    const position = positions.find((item) => item.asset === asset);
+    if (!position) throw new Error(`No Simple Earn position for ${asset}`);
 
     return this.spot({
       method: 'POST',
       path: '/sapi/v1/simple-earn/flexible/redeem',
-      params: { productId: pos.productId, amount },
+      params: { productId: position.productId, amount },
       signed: true,
     });
   }
 
-  // ── Simple Earn Product Lists ────────────────────────────
-
   async getFlexibleProducts(asset?: string): Promise<FlexibleProduct[]> {
     const params: Record<string, string | number> = { size: 100 };
     if (asset) params.asset = asset;
+
     const data = await this.spot<{ rows: FlexibleProduct[]; total: number }>({
       method: 'GET',
       path: '/sapi/v1/simple-earn/flexible/list',
@@ -231,43 +264,89 @@ export class BinanceClient {
   async getLockedProducts(asset?: string): Promise<LockedProduct[]> {
     const params: Record<string, string | number> = { size: 100 };
     if (asset) params.asset = asset;
-    const data = await this.spot<{ rows: LockedProduct[]; total: number }>({
+
+    const data = await this.spot<{ rows: LockedProductListRow[]; total: number }>({
       method: 'GET',
       path: '/sapi/v1/simple-earn/locked/list',
       params,
       signed: true,
     });
-    return data.rows ?? [];
+
+    return (data.rows ?? []).map((row) => {
+      const detail = row.detail ?? {};
+      const quota = row.quota ?? {};
+      return {
+        projectId: row.projectId,
+        asset: detail.asset ?? asset ?? '',
+        rewardAsset: detail.rewardAsset,
+        duration: Number(detail.duration ?? 0),
+        annualPercentageRate: detail.apr ?? '0',
+        extraRewardAPR: detail.extraRewardAPR,
+        boostApr: detail.boostApr,
+        canPurchase: row.canPurchase ?? (!detail.isSoldOut && (detail.status ?? '').toUpperCase() !== 'END'),
+        minPurchaseAmount: quota.minimum ?? '0',
+        maxPurchaseAmountPerUser: quota.perUserMax ?? quota.maximum ?? '0',
+        status: detail.status ?? 'UNKNOWN',
+        isSoldOut: detail.isSoldOut,
+      };
+    });
   }
 
-  async subscribeLocked(projectId: string, amount: number): Promise<{ purchaseId: number; success: boolean }> {
+  async subscribeLocked(
+    projectId: string,
+    amount: number,
+    options: SubscribeLockedOptions = {},
+  ): Promise<{ purchaseId: number; positionId?: string; success: boolean }> {
+    const params: Record<string, string | number | boolean> = {
+      projectId,
+      amount,
+      autoSubscribe: options.autoSubscribe ?? false,
+    };
+    if (options.sourceAccount) params.sourceAccount = options.sourceAccount;
+    if (options.redeemTo) params.redeemTo = options.redeemTo;
+
     return this.spot({
       method: 'POST',
       path: '/sapi/v1/simple-earn/locked/subscribe',
-      params: { projectId, amount },
+      params,
       signed: true,
     });
   }
 
-  // ── Funding Wallet ───────────────────────────────────────
+  async subscribeLockedByAsset(
+    asset: string,
+    amount: number,
+    options: SubscribeLockedOptions = {},
+  ): Promise<{ purchaseId: number; positionId?: string; success: boolean; product: LockedProduct }> {
+    const products = await this.getLockedProducts(asset);
+    const purchaseable = products.filter((product) => product.canPurchase);
+    const filtered = options.duration
+      ? purchaseable.filter((product) => product.duration === options.duration)
+      : purchaseable;
+    const candidates = filtered.length > 0 ? filtered : purchaseable;
+    const product = candidates
+      .sort((left, right) => parseFloat(right.annualPercentageRate) - parseFloat(left.annualPercentageRate))[0];
 
-  async getFundingBalance(asset?: string): Promise<Array<{ asset: string; free: string; locked: string; freeze: string }>> {
-    const data = await this.spot<Array<{ asset: string; free: string; locked: string; freeze: string }>>({
+    if (!product) {
+      const durationText = options.duration ? ` with ${options.duration}d lock` : '';
+      throw new Error(`No locked Simple Earn product found for ${asset}${durationText}`);
+    }
+
+    const result = await this.subscribeLocked(product.projectId, amount, options);
+    return { ...result, product };
+  }
+
+  async getFundingBalance(asset?: string): Promise<FundingBalance[]> {
+    const data = await this.spot<FundingBalance[]>({
       method: 'POST',
       path: '/sapi/v1/asset/get-funding-asset',
       params: asset ? { asset } : {},
       signed: true,
     });
-    return data.filter(b => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0);
+    return data.filter((balance) => parseFloat(balance.free) > 0 || parseFloat(balance.locked) > 0);
   }
 
-  // ── Universal Transfer ───────────────────────────────────
-
-  async universalTransfer(
-    type: string,
-    asset: string,
-    amount: number
-  ): Promise<{ tranId: number }> {
+  async universalTransfer(type: string, asset: string, amount: number): Promise<{ tranId: number }> {
     return this.spot({
       method: 'POST',
       path: '/sapi/v1/asset/transfer',
@@ -276,52 +355,10 @@ export class BinanceClient {
     });
   }
 
-  // ── All Spot Balances (non-zero) ─────────────────────────
-
-  async getAllSpotBalances(): Promise<Array<{ asset: string; free: number; locked: number }>> {
-    const data = await this.spot<{ balances: SpotBalance[] }>({
-      method: 'GET',
-      path: '/api/v3/account',
-      signed: true,
-    });
-    return data.balances
-      .map(b => ({ asset: b.asset, free: parseFloat(b.free), locked: parseFloat(b.locked) }))
-      .filter(b => b.free > 0 || b.locked > 0);
-  }
-
-  // ── Trading ──────────────────────────────────────────────
-
-  async placeFuturesOrder(
-    side: 'BUY' | 'SELL',
-    quantity: number,
-    leverage?: number
-  ): Promise<OrderResult> {
-    if (leverage) {
-      await this.futures<void>({
-        method: 'POST',
-        path: '/fapi/v1/leverage',
-        params: { symbol: 'BNBUSDT', leverage },
-        signed: true,
-      });
-    }
-
-    return this.futures({
-      method: 'POST',
-      path: '/fapi/v1/order',
-      params: {
-        symbol: 'BNBUSDT',
-        side,
-        type: 'MARKET',
-        quantity: quantity.toFixed(2),
-      },
-      signed: true,
-    });
-  }
-
   async placeSpotOrder(
     side: 'BUY' | 'SELL',
     quantity: number,
-    symbol = 'BNBUSDT'
+    symbol = 'BNBUSDT',
   ): Promise<OrderResult> {
     return this.spot({
       method: 'POST',
@@ -330,7 +367,7 @@ export class BinanceClient {
         symbol,
         side,
         type: 'MARKET',
-        quantity: quantity.toFixed(4),
+        quantity: quantity.toFixed(8),
       },
       signed: true,
     });
@@ -339,7 +376,7 @@ export class BinanceClient {
   async placeSpotQuoteOrder(
     side: 'BUY' | 'SELL',
     quoteQty: number,
-    symbol = 'BNBUSDT'
+    symbol = 'BNBUSDT',
   ): Promise<OrderResult> {
     return this.spot({
       method: 'POST',
@@ -352,17 +389,6 @@ export class BinanceClient {
       },
       signed: true,
     });
-  }
-
-  // ── Market Data ──────────────────────────────────────────
-
-  async getFundingRate(symbol = 'BNBUSDT'): Promise<FundingRate> {
-    const data = await this.futures<FundingRate[]>({
-      method: 'GET',
-      path: '/fapi/v1/premiumIndex',
-      params: { symbol },
-    });
-    return data[0];
   }
 
   async getPrice(symbol = 'BNBUSDT'): Promise<number> {
@@ -387,8 +413,6 @@ export class BinanceClient {
     }
   }
 
-  // ── Rewards & Dividends ──────────────────────────────────
-
   async getAssetDividend(params?: {
     asset?: string;
     limit?: number;
@@ -396,10 +420,10 @@ export class BinanceClient {
     endTime?: number;
   }): Promise<AssetDividend[]> {
     const merged = { limit: 20, ...params };
-    // Binance requires endTime when startTime is provided
     if (merged.startTime && !merged.endTime) {
       merged.endTime = Date.now();
     }
+
     const data = await this.spot<{ rows: AssetDividend[]; total: number }>({
       method: 'GET',
       path: '/sapi/v1/asset/assetDividend',
@@ -409,11 +433,7 @@ export class BinanceClient {
     return data.rows ?? [];
   }
 
-  async getConvertQuote(
-    fromAsset: string,
-    toAsset: string,
-    fromAmount: number
-  ): Promise<ConvertQuote> {
+  async getConvertQuote(fromAsset: string, toAsset: string, fromAmount: number): Promise<ConvertQuote> {
     return this.spot({
       method: 'POST',
       path: '/sapi/v1/convert/getQuote',
@@ -431,28 +451,32 @@ export class BinanceClient {
     });
   }
 
-  async convertSmallBalance(excludeAssets?: Set<string>): Promise<{ totalTransferBtc: string; totalServiceChargeInBNB: string }> {
-    // Get dust-convertible assets first
-    const dustInfo = await this.spot<{ details: Array<{ asset: string; toBNB: string }> }>({
+  async getDustConvertibleAssets(targetAsset = 'BNB'): Promise<DustConvertibleAsset[]> {
+    const dustInfo = await this.spot<{ details: DustConvertibleAsset[] }>({
       method: 'POST',
-      path: '/sapi/v1/asset/dust-btc',
+      path: '/sapi/v1/asset/dust-convert/query-convertible-assets',
+      params: { targetAsset },
       signed: true,
     });
-    const dustAssets = dustInfo.details
-      ?.filter((d) => parseFloat(d.toBNB) > 0)
-      .map((d) => d.asset)
-      .filter((a) => a !== 'BNB' && a !== 'USDT' && !(excludeAssets?.has(a)));
-
-    if (!dustAssets || dustAssets.length === 0) {
-      return { totalTransferBtc: '0', totalServiceChargeInBNB: '0' };
-    }
-
-    return this.spot({
-      method: 'POST',
-      path: '/sapi/v1/asset/dust',
-      params: { asset: dustAssets.join(',') },
-      signed: true,
-    });
+    return dustInfo.details ?? [];
   }
 
+  async convertSmallBalance(excludeAssets?: Set<string>, targetAsset = 'BNB'): Promise<DustConversionResult> {
+    const dustAssets = (await this.getDustConvertibleAssets(targetAsset))
+      .filter((item) => parseFloat(item.toTargetAssetAmount) > 0)
+      .map((item) => item.asset)
+      .filter((asset) => asset !== targetAsset && asset !== 'USDT' && !(excludeAssets?.has(asset)));
+
+    if (dustAssets.length === 0) {
+      return { totalTransfered: '0', totalServiceCharge: '0', transferResult: [], assets: [] };
+    }
+
+    const result = await this.spot<Omit<DustConversionResult, 'assets'>>({
+      method: 'POST',
+      path: '/sapi/v1/asset/dust-convert/convert',
+      params: { asset: dustAssets.join(','), targetAsset },
+      signed: true,
+    });
+    return { ...result, assets: dustAssets };
+  }
 }

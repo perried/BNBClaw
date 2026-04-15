@@ -1,9 +1,35 @@
 import type { BinanceClient } from '../api/binance-client.js';
-import { insertReward, isRewardProcessed } from '../db/queries.js';
+import type { AssetDividend } from '../api/types.js';
+import {
+  getRewardByTranId,
+  insertReward,
+  updateRewardConversion,
+} from '../db/queries.js';
 import { createLogger } from '../utils/logger.js';
-import { classifySource, sellToUsdt } from '../utils/reward-helpers.js';
+import {
+  classifySource,
+  sellToUsdt,
+  shouldAutoConvertReward,
+} from '../utils/reward-helpers.js';
 
 const log = createLogger('earn-manager');
+
+export interface RewardSyncSummary {
+  scanned: number;
+  newlyRecorded: number;
+  convertedCount: number;
+  convertedUsdt: number;
+  pendingCount: number;
+  skippedCount: number;
+}
+
+export interface DustCleanupSummary {
+  convertedBnb: number;
+  feeBnb: number;
+  assets: string[];
+}
+
+type RewardOutcome = 'converted' | 'pending' | 'recorded' | 'skipped';
 
 export class EarnManager {
   private client: BinanceClient;
@@ -14,70 +40,166 @@ export class EarnManager {
     this.notify = notify;
   }
 
-  // ── WebSocket handler: instant reward detection ────────
-
   async onBalanceUpdate(asset: string, delta: number): Promise<void> {
     if (asset === 'BNB' || asset === 'USDT' || delta <= 0) return;
 
     log.info(`Balance update: +${delta} ${asset}, verifying if reward...`);
 
-    // Cross-check with dividend API to confirm it's a reward
     const dividends = await this.client.getAssetDividend({ asset, limit: 5 });
     const now = Date.now();
 
-    const match = dividends.find(
-      (d) =>
-        Math.abs(parseFloat(d.amount) - delta) < 0.0001 &&
-        Math.abs(d.divTime - now) < 5 * 60 * 1000 // within 5 minutes
+    const match = dividends.find((dividend) =>
+      Math.abs(parseFloat(dividend.amount) - delta) < 0.0001 &&
+      Math.abs(dividend.divTime - now) < 5 * 60 * 1000,
     );
 
     if (!match) {
-      log.info(`${asset} deposit is NOT a reward (user buy/transfer). Skipping.`);
+      log.info(`${asset} deposit is not a reward. Skipping.`);
       return;
     }
 
-    if (isRewardProcessed(match.tranId)) {
-      log.info(`Reward ${match.tranId} already processed. Skipping.`);
-      return;
-    }
-
-    const source = classifySource(match.enInfo);
-    log.info(`Confirmed reward: ${match.amount} ${asset} from ${source}`);
-
-    // Sell to USDT
-    const usdtAmount = await sellToUsdt(this.client, asset, parseFloat(match.amount));
-
-    // Record in DB
-    insertReward({
-      timestamp: new Date().toISOString(),
-      source,
-      asset,
-      amount: parseFloat(match.amount),
-      tran_id: match.tranId,
-      converted_to: usdtAmount > 0 ? 'USDT' : null,
-      converted_amount: usdtAmount > 0 ? usdtAmount : null,
-    });
-
-    if (usdtAmount > 0) {
-      this.notify(`🦞 Sold ${parseFloat(match.amount)} ${asset} (${source}) → $${usdtAmount.toFixed(2)} USDT`);
-    }
+    await this.processDividend(match, true);
   }
-
-  // ── Heartbeat: sweep idle BNB + catch missed rewards ───
 
   async heartbeat(): Promise<void> {
     await this.sweepIdleBnb();
     await this.sweepFundingBnb();
-    await this.catchMissedRewards();
+    await this.syncRecentRewards();
+  }
+
+  async syncRecentRewards(options: {
+    limit?: number;
+    startTime?: number;
+    notify?: boolean;
+  } = {}): Promise<RewardSyncSummary> {
+    const notify = options.notify ?? true;
+    const dividends = await this.client.getAssetDividend({
+      limit: options.limit ?? 100,
+      startTime: options.startTime,
+    });
+
+    const summary: RewardSyncSummary = {
+      scanned: dividends.length,
+      newlyRecorded: 0,
+      convertedCount: 0,
+      convertedUsdt: 0,
+      pendingCount: 0,
+      skippedCount: 0,
+    };
+
+    for (const dividend of dividends.sort((left, right) => left.divTime - right.divTime)) {
+      const existing = getRewardByTranId(dividend.tranId);
+      const outcome = await this.processDividend(dividend, notify);
+
+      if (!existing && outcome !== 'skipped') {
+        summary.newlyRecorded++;
+      }
+
+      if (outcome === 'converted') {
+        const updated = getRewardByTranId(dividend.tranId);
+        summary.convertedCount++;
+        summary.convertedUsdt += updated?.converted_amount ?? 0;
+      } else if (outcome === 'pending') {
+        summary.pendingCount++;
+      } else if (outcome === 'skipped') {
+        summary.skippedCount++;
+      }
+    }
+
+    return summary;
+  }
+
+  async cleanupDust(options: { notify?: boolean } = {}): Promise<DustCleanupSummary> {
+    const notify = options.notify ?? true;
+
+    // Keep recent Launchpool/HODLer rewards away from dust conversion while
+    // they are being sold to USDT through the reward sync path.
+    await this.syncRecentRewards({ notify: false });
+
+    const recentDividends = await this.client.getAssetDividend({ limit: 100 });
+    const recentRewardAssets = new Set(
+      recentDividends
+        .filter((dividend) => shouldAutoConvertReward(classifySource(dividend.enInfo), dividend.asset))
+        .map((dividend) => dividend.asset),
+    );
+
+    const result = await this.client.convertSmallBalance(recentRewardAssets, 'BNB');
+    const convertedBnb = parseFloat(result.totalTransfered || '0');
+    const feeBnb = parseFloat(result.totalServiceCharge || '0');
+
+    if (notify && convertedBnb > 0) {
+      const assetList = result.assets.length > 0 ? result.assets.join(', ') : 'dust balances';
+      this.notify(
+        `Dust cleanup: ${assetList} -> ${convertedBnb.toFixed(8)} BNB` +
+        (feeBnb > 0 ? ` (fee ${feeBnb.toFixed(8)} BNB)` : ''),
+      );
+    }
+
+    return { convertedBnb, feeBnb, assets: result.assets };
+  }
+
+  private async processDividend(dividend: AssetDividend, notify: boolean): Promise<RewardOutcome> {
+    const amount = parseFloat(dividend.amount);
+    const source = classifySource(dividend.enInfo);
+    const existing = getRewardByTranId(dividend.tranId);
+    const autoConvert = shouldAutoConvertReward(source, dividend.asset);
+
+    if (existing && (!autoConvert || existing.converted_to)) {
+      return 'skipped';
+    }
+
+    let usdtAmount = 0;
+    if (autoConvert) {
+      usdtAmount = await sellToUsdt(this.client, dividend.asset, amount);
+    }
+
+    if (!existing) {
+      insertReward({
+        timestamp: new Date(dividend.divTime).toISOString(),
+        source,
+        asset: dividend.asset,
+        amount,
+        tran_id: dividend.tranId,
+        converted_to: usdtAmount > 0 ? 'USDT' : null,
+        converted_amount: usdtAmount > 0 ? usdtAmount : null,
+      });
+    } else if (usdtAmount > 0) {
+      updateRewardConversion(dividend.tranId, 'USDT', usdtAmount);
+    }
+
+    if (usdtAmount > 0) {
+      if (notify) {
+        this.notify(
+          `Auto-converted ${amount} ${dividend.asset} (${dividend.enInfo}) -> $${usdtAmount.toFixed(2)} USDT`,
+        );
+      }
+      return 'converted';
+    }
+
+    if (autoConvert) {
+      if (notify && !existing) {
+        this.notify(
+          `Launchpool/HODLer reward detected: +${dividend.amount} ${dividend.asset}. ` +
+          'Auto-convert to USDT failed, so it will be retried later.',
+        );
+      }
+      return 'pending';
+    }
+
+    if (notify && !existing && dividend.asset !== 'BNB' && dividend.asset !== 'USDT') {
+      this.notify(`New distribution: +${dividend.amount} ${dividend.asset} (${dividend.enInfo})`);
+    }
+
+    return existing ? 'skipped' : 'recorded';
   }
 
   private async sweepIdleBnb(): Promise<void> {
     try {
       const { free } = await this.client.getSpotBalance('BNB');
       if (free > 0.001) {
-        await this.client.subscribeEarn('BNB', free);
+        await this.client.subscribeEarn('BNB', free, { sourceAccount: 'SPOT' });
         log.info(`Swept ${free} idle BNB from spot to Simple Earn`);
-        this.notify(`🦞 Found ${free.toFixed(4)} BNB in spot → moved to Simple Earn.`);
+        this.notify(`Found ${free.toFixed(4)} BNB in spot -> moved to Simple Earn.`);
       }
     } catch (err) {
       log.error('Failed to sweep BNB to earn', err);
@@ -87,89 +209,15 @@ export class EarnManager {
   private async sweepFundingBnb(): Promise<void> {
     try {
       const funding = await this.client.getFundingBalance('BNB');
-      const bnb = funding.find(b => b.asset === 'BNB');
+      const bnb = funding.find((balance) => balance.asset === 'BNB');
       const free = parseFloat(bnb?.free ?? '0');
       if (free > 0.001) {
-        // Transfer funding → spot, then spot → earn
-        await this.client.universalTransfer('FUNDING_MAIN', 'BNB', free);
-        await this.client.subscribeEarn('BNB', free);
-        log.info(`Swept ${free} BNB from funding → Simple Earn`);
-        this.notify(`🦞 Found ${free.toFixed(4)} BNB in funding wallet → moved to Simple Earn.`);
+        await this.client.subscribeEarn('BNB', free, { sourceAccount: 'FUND' });
+        log.info(`Swept ${free} BNB from funding to Simple Earn`);
+        this.notify(`Found ${free.toFixed(4)} BNB in funding wallet -> moved to Simple Earn.`);
       }
     } catch (err) {
       log.error('Failed to sweep funding BNB', err);
     }
   }
-
-  private async catchMissedRewards(): Promise<void> {
-    try {
-      const dividends = await this.client.getAssetDividend({ limit: 20 });
-
-      for (const div of dividends) {
-        if (isRewardProcessed(div.tranId)) continue;
-
-        const amount = parseFloat(div.amount);
-        const source = classifySource(div.enInfo);
-
-        // Record in DB
-        insertReward({
-          timestamp: new Date(div.divTime).toISOString(),
-          source,
-          asset: div.asset,
-          amount,
-          tran_id: div.tranId,
-          converted_to: null,
-          converted_amount: null,
-        });
-
-        // Notify on notable distributions
-        if (source === 'AIRDROP' || source === 'LAUNCHPOOL') {
-          this.notify(
-            `🎁 New ${div.enInfo}: +${div.amount} ${div.asset}\n` +
-            `Use "convert ${div.asset}" to sell to USDT, or "convert ${div.asset} BNB" to convert to BNB.`
-          );
-        } else if (div.asset !== 'BNB' && div.asset !== 'USDT') {
-          this.notify(
-            `🦞 New distribution: +${div.amount} ${div.asset} (${div.enInfo})\n` +
-            `Use "convert ${div.asset}" to sell.`
-          );
-        }
-      }
-    } catch (err) {
-      log.error('Failed to catch missed rewards', err);
-    }
-  }
-
-  // ── Dust Cleanup (weekly) ──────────────────────────────
-  // IMPORTANT: Only converts truly tiny leftover dust to BNB.
-  // Airdrop and Launchpool tokens are sold to USDT first by catchMissedRewards().
-
-  async cleanupDust(): Promise<void> {
-    // First, sell any unclaimed airdrop/launchpool rewards to USDT
-    await this.catchMissedRewards();
-
-    try {
-      // Get dust-eligible assets, but exclude any that were just received
-      // as rewards (those should already be sold to USDT above)
-      const recentDividends = await this.client.getAssetDividend({ limit: 20 });
-      const recentRewardAssets = new Set(
-        recentDividends
-          .filter(d => {
-            const source = classifySource(d.enInfo);
-            return source === 'AIRDROP' || source === 'LAUNCHPOOL' || source === 'DISTRIBUTION';
-          })
-          .map(d => d.asset)
-      );
-
-      const result = await this.client.convertSmallBalance(recentRewardAssets);
-      const bnb = parseFloat(result.totalServiceChargeInBNB || '0');
-      if (bnb > 0) {
-        log.info(`Dust cleanup: converted to ${bnb} BNB`);
-        this.notify(`🦞 Dust cleanup: small balances → ${bnb.toFixed(6)} BNB`);
-      }
-    } catch (err) {
-      log.error('Dust cleanup failed', err);
-    }
-  }
-
 }
